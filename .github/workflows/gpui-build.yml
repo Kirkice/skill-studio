@@ -18,7 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.95.0
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gpui
+          workspaces: ". -> gpui/target"
       - run: cargo test --locked
       - run: cargo build --release --locked
       - name: Package Windows executable
@@ -27,7 +27,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item target/release/skill-studio-gpui.exe package/
-          Copy-Item README.md package/README.txt
+          Copy-Item ../README.md package/README.txt
+          Copy-Item ../THIRD-PARTY-NOTICES.md package/
+          New-Item -ItemType Directory -Force package/licenses | Out-Null
+          Copy-Item assets/fonts/OFL*.txt package/licenses/
           Compress-Archive -Path package/* -DestinationPath skill-studio-gpui-windows.zip
       - name: Package macOS application
         if: runner.os == 'macOS'
@@ -36,7 +39,10 @@ jobs:
           mkdir -p 'package/skill studio.app/Contents/MacOS' 'package/skill studio.app/Contents/Resources'
           cp target/release/skill-studio-gpui 'package/skill studio.app/Contents/MacOS/'
           cp Info.plist 'package/skill studio.app/Contents/Info.plist'
-          cp ../src-tauri/icons/icon.icns 'package/skill studio.app/Contents/Resources/icon.icns'
+          cp assets/icon.icns 'package/skill studio.app/Contents/Resources/icon.icns'
+          mkdir -p 'package/skill studio.app/Contents/Resources/licenses'
+          cp assets/fonts/OFL*.txt 'package/skill studio.app/Contents/Resources/licenses/'
+          cp ../THIRD-PARTY-NOTICES.md 'package/skill studio.app/Contents/Resources/'
           ditto -c -k --keepParent 'package/skill studio.app' skill-studio-gpui-macos.zip
       - uses: actions/upload-artifact@v4
         with:

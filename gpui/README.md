@@ -1,21 +1,7 @@
-# GPUI 迁移预览
+# skill studio 原生桌面端
 
-这是独立的迁移中版本，不是原 Tauri 应用的功能替代品。保留原应用以避免功能回退或丢失未提交的修改。
+从项目根目录运行 `cargo run --release`、`cargo test --locked` 或 `cargo build --release --locked`。
 
-目前支持打开工作区、扫描引用、查看文件列表和基础多行文档编辑；文件变化会批量触发索引刷新，外部修改当前文件会提示且不会覆盖编辑内容，也可手动刷新。保存时检查外部修改并保留原文件权限。有未保存内容时，切换文件、切换工作区或关闭窗口会被阻止；可以先保存或确认放弃修改。
+Windows 程序位于 `gpui/target/release/skill-studio-gpui.exe`。`smoke.ps1` 检查 Release 程序启动五秒内能否创建窗口，不代表交互验收。
 
-图谱支持节点、引用线、缩放、滚动画布和拖动节点；拖动结束后布局按工作区自动保存在系统用户配置目录，也可重置布局。命令面板通过顶部「命令」打开，包含打开、刷新、保存、保存布局和重置布局，提供 Ctrl/Cmd+Shift+P 和 Ctrl/Cmd+S 快捷键。
-
-尚不支持图谱范围筛选、节点类型覆盖、命令搜索、语法高亮、创建 Skill、布局导入导出等原版功能。GPUI 图谱、快捷键和中文输入等交互仍需在目标平台手动验证。不得将其当作完整替代品。
-
-`.github/workflows/gpui-build.yml` 提供 Windows 可执行文件 ZIP 和 macOS .app ZIP 的 CI 打包；产物未签名、未公证，不是安装程序。当前工作流尚需在 GitHub Actions 实际运行验证。
-
-需要 Rust 1.95.0 和系统原生构建依赖，Windows 需 MSVC 与 Windows SDK。运行：
-
-```sh
-cd gpui
-cargo run
-cargo test
-```
-
-`src/core.rs` 暂时从现有后端复制，仅用于迁移验证；后续应提取为两个前端共用的 crate，避免行为分叉。原项目的布局保存在 WebView localStorage，新版本不能自动读取，迁移时需要明确的导出/导入方案。
+功能、限制、构建前提和旧版迁移说明见根目录 `README.md`。

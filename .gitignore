@@ -1,10 +1,6 @@
 # Dependencies and build outputs
-node_modules/
-dist/
 /target/
-/src-tauri/target/
 /gpui/target/
-/src-tauri/gen/schemas/
 
 # Local environment and secrets
 .env

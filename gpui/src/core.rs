@@ -135,7 +135,7 @@ fn err(e: impl std::fmt::Display) -> String {
 fn safe(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let p = root.join(relative).canonicalize().map_err(err)?;
     if !p.starts_with(root) {
-        return Err("不能访问工作区之外的文件".into());
+        return Err("Cannot access files outside the workspace".into());
     }
     Ok(p)
 }
@@ -147,7 +147,7 @@ fn id(root: &Path, p: &Path) -> String {
 }
 pub fn open_workspace(path: &Path) -> Result<Graph, String> {
     let root = path.canonicalize().map_err(err)?;
-    if !root.is_dir() { return Err("请选择目录".into()); }
+    if !root.is_dir() { return Err("Select a directory".into()); }
     scan_workspace(&root)
 }
 pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
@@ -226,7 +226,7 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
             let canonical = target_path.canonicalize();
             if let Ok(ref cp) = canonical {
                 if !cp.starts_with(&root) {
-                    graph.warnings.push(format!("外部引用已忽略: {dest}"));
+                    graph.warnings.push(format!("External reference ignored: {dest}"));
                     continue;
                 }
             }
@@ -261,7 +261,7 @@ pub fn read_document(root: &Path, path: &str) -> Result<Document, String> {
     let p = safe(root, path)?;
     let meta = fs::metadata(&p).map_err(err)?;
     if meta.len() > 2_000_000 {
-        return Err("文件超过 2MB，暂不支持编辑".into());
+        return Err("Files larger than 2 MB cannot be edited".into());
     }
     Ok(Document {
         content: fs::read_to_string(p).map_err(err)?,
@@ -270,13 +270,13 @@ pub fn read_document(root: &Path, path: &str) -> Result<Document, String> {
 pub fn save_document(root: &Path, path: &str, content: &str, original: &str) -> Result<(), String> {
     let p = safe(root, path)?;
     if fs::read_to_string(&p).map_err(err)? != original {
-        return Err("文件已被外部修改，请重新打开后再保存（当前编辑内容仍保留）".into());
+        return Err("The file changed externally. Reload before saving; your edits are retained.".into());
     }
     write_document(&p, content.as_bytes())
 }
 fn write_document(p: &Path, content: &[u8]) -> Result<(), String> {
     let permissions = fs::metadata(p).map_err(err)?.permissions();
-    let mut temporary = tempfile::NamedTempFile::new_in(p.parent().ok_or("无效文件路径")?).map_err(err)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(p.parent().ok_or("Invalid file path")?).map_err(err)?;
     temporary.as_file().set_permissions(permissions).map_err(err)?;
     temporary.write_all(content).map_err(err)?;
     temporary.as_file().sync_all().map_err(err)?;
@@ -290,7 +290,7 @@ pub fn create_skill(root: &Path, name: &str) -> Result<(), String> {
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
     {
-        return Err("名称仅支持小写字母、数字和连字符，最多 80 字符".into());
+        return Err("Use lowercase letters, digits and hyphens; at most 80 characters".into());
     }
     let dir = root.join(name);
     fs::create_dir(&dir).map_err(err)?;
@@ -325,6 +325,18 @@ mod tests {
         assert_eq!(title, "中文标题");
         assert_eq!(summary, "这是摘要。");
         assert_eq!(headings, vec!["操作步骤"]);
+    }
+    #[test]
+    fn create_skill_validates_name_and_does_not_overwrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        assert!(create_skill(&root, "../bad").is_err());
+        create_skill(&root, "my-skill").unwrap();
+        let path = root.join("my-skill/SKILL.md");
+        assert!(fs::read_to_string(&path).unwrap().contains("name: my-skill"));
+        fs::write(&path, "user content").unwrap();
+        assert!(create_skill(&root, "my-skill").is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), "user content");
     }
     #[test]
     fn save_rejects_external_changes_and_keeps_disk_content() {
