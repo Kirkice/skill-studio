@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod watch;
 use pulldown_cmark::{Event, Parser, Tag};
 use serde::Serialize;
 use std::{
@@ -13,6 +14,8 @@ use walkdir::WalkDir;
 
 #[derive(Default)]
 struct Workspace(Mutex<Option<PathBuf>>);
+#[derive(Default)]
+struct WorkspaceWatcher(Mutex<Option<notify::RecommendedWatcher>>);
 #[derive(Serialize)]
 struct Node {
     id: String,
@@ -159,13 +162,21 @@ fn id(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 #[tauri::command]
-fn open_workspace(path: String, state: State<Workspace>) -> Result<Graph, String> {
+fn open_workspace(path: String, state: State<Workspace>, watcher: State<WorkspaceWatcher>, app: tauri::AppHandle) -> Result<Graph, String> {
     let p = PathBuf::from(path).canonicalize().map_err(err)?;
     if !p.is_dir() {
         return Err("请选择目录".into());
     }
+    let result = watch::start(&p, app);
+    *watcher.0.lock().map_err(err)? = None;
+    let warning = match result {
+        Ok(new_watcher) => { *watcher.0.lock().map_err(err)? = Some(new_watcher); None },
+        Err(e) => Some(format!("文件监听不可用，请手动刷新：{e}")),
+    };
     *state.0.lock().map_err(err)? = Some(p);
-    scan_workspace(state)
+    let mut graph = scan_workspace(state)?;
+    if let Some(warning) = warning { graph.warnings.push(warning); }
+    Ok(graph)
 }
 #[tauri::command]
 fn scan_workspace(state: State<Workspace>) -> Result<Graph, String> {
@@ -297,11 +308,15 @@ fn save_document(
     if fs::read_to_string(&p).map_err(err)? != original {
         return Err("文件已被外部修改，请重新打开后再保存（当前编辑内容仍保留）".into());
     }
-    let mut temporary =
-        tempfile::NamedTempFile::new_in(p.parent().ok_or("无效文件路径")?).map_err(err)?;
-    temporary.write_all(content.as_bytes()).map_err(err)?;
+    write_document(&p, content.as_bytes())
+}
+fn write_document(p: &Path, content: &[u8]) -> Result<(), String> {
+    let permissions = fs::metadata(p).map_err(err)?.permissions();
+    let mut temporary = tempfile::NamedTempFile::new_in(p.parent().ok_or("无效文件路径")?).map_err(err)?;
+    temporary.as_file().set_permissions(permissions).map_err(err)?;
+    temporary.write_all(content).map_err(err)?;
     temporary.as_file().sync_all().map_err(err)?;
-    temporary.persist(&p).map_err(err)?;
+    temporary.persist(p).map_err(err)?;
     Ok(())
 }
 #[tauri::command]
@@ -350,6 +365,26 @@ mod tests {
         assert_eq!(headings, vec!["操作步骤"]);
     }
     #[test]
+    fn save_replaces_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("file.md");
+        fs::write(&path, "old").unwrap();
+        write_document(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn save_preserves_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("script.sh");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o751)).unwrap();
+        write_document(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o751);
+    }
+    #[test]
     fn workspace_boundary_is_enforced() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
@@ -366,6 +401,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Workspace::default())
+        .manage(WorkspaceWatcher::default())
         .invoke_handler(tauri::generate_handler![
             open_workspace,
             scan_workspace,
@@ -374,5 +410,5 @@ fn main() {
             create_skill
         ])
         .run(tauri::generate_context!())
-        .expect("无法启动 SkillsRider");
+        .expect("无法启动 skill studio");
 }

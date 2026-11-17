@@ -26,5 +26,5 @@ jobs:
       - run: npm run tauri build
       - uses: actions/upload-artifact@v4
         with:
-          name: SkillsRider-${{ matrix.os }}
+          name: skill-studio-${{ matrix.os }}
           path: src-tauri/target/release/bundle/

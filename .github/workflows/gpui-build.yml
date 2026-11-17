@@ -1,0 +1,45 @@
+name: GPUI desktop build
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: gpui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gpui
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Package Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item target/release/skill-studio-gpui.exe package/
+          Copy-Item README.md package/README.txt
+          Compress-Archive -Path package/* -DestinationPath skill-studio-gpui-windows.zip
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p 'package/skill studio.app/Contents/MacOS' 'package/skill studio.app/Contents/Resources'
+          cp target/release/skill-studio-gpui 'package/skill studio.app/Contents/MacOS/'
+          cp Info.plist 'package/skill studio.app/Contents/Info.plist'
+          cp ../src-tauri/icons/icon.icns 'package/skill studio.app/Contents/Resources/icon.icns'
+          ditto -c -k --keepParent 'package/skill studio.app' skill-studio-gpui-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skill-studio-gpui-${{ matrix.os }}
+          path: gpui/skill-studio-gpui-*.zip
+          if-no-files-found: error

@@ -1,4 +1,4 @@
-# SkillsRider
+# skill studio
 
 本地优先的 Skill 引用图谱与源文件编辑器。Tauri 2 / Rust / React / TypeScript。
 
@@ -28,7 +28,7 @@ npm run desktop:build
 npm run desktop:exe
 ```
 
-Windows EXE 位于 `src-tauri/target/release/skills-rider.exe`，仍需系统安装 WebView2。
+Windows EXE 位于 `src-tauri/target/release/skill-studio.exe`，仍需系统安装 WebView2。
 
 安装包产物位于 `src-tauri/target/release/bundle/`。Windows 和 macOS 分别在对应系统构建；macOS 支持 Intel / Apple Silicon。正式分发需要自行配置代码签名和 macOS 公证。GitHub Actions 提供未签名的双平台构建。
 
@@ -39,7 +39,9 @@ Windows EXE 位于 `src-tauri/target/release/skills-rider.exe`，仍需系统安
 - 默认显示 Skill 直接引用，可切换递归引用或全部文件；失效引用默认隐藏。
 - 节点显示原文标题、摘要、前三个章节及引用数量，中文内容保持原文。
 - 主 Skill、关联 Skill、内部子流程、参考文档、脚本采用不同节点样式；子流程自动识别标为推定，右侧可手动校正，随布局保存。设计规则见 [NODE-DESIGN.md](NODE-DESIGN.md)。
+- 工作区文件变化时自动刷新索引；监听不可用时可手动刷新。外部修改当前文件会提示，保留编辑器内容，可手动重新加载。
 - 拖动状态独立于编辑器和文件树，松开鼠标后才提交布局变更。
+- 命令面板：Ctrl+Shift+P（macOS 使用 Cmd+Shift+P）；Ctrl/Cmd+S 保存文档。命令面板支持导入、导出布局 JSON，导入后需点击保存布局。
 - 节点可拖动，点击「保存布局」后按工作区路径保存在应用本地存储，下次打开恢复；「重置布局」后需再次保存。不修改 Markdown，布局不随工作区跨设备同步。
 - 识别 Markdown 链接、图片链接、独立行内代码形式的文件路径。
 - 引用边携带源文件行号；点击边打开源文件，状态栏显示行号。
@@ -54,7 +56,7 @@ Windows EXE 位于 `src-tauri/target/release/skills-rider.exe`，仍需系统安
 
 这不是执行流程图：边表示文本中的文件引用，不代表运行时调用。
 
-目前仅支持手动刷新（保存和创建后自动刷新）。尚未实现自然语言 / CLI / MCP 工具提取、文件自动监听、重命名联动、删除、拖线写回和 Markdown 渲染预览。代码块中的命令不会被当作确定引用；行内文件路径仍可能是示例，应结合原文判断。尚未处理 URL 编码文件名。
+尚未实现自然语言 / CLI / MCP 工具提取、重命名联动、删除、拖线写回和 Markdown 渲染预览。自动监听不可用时仍可手动刷新。代码块中的命令不会被当作确定引用；行内文件路径仍可能是示例，应结合原文判断。尚未处理 URL 编码文件名。
 
 工作区为扫描边界；不跟随目录符号链接；文件读写进行 canonicalize 边界检查。面向可信的本地工作区，不应把它当成针对恶意并发文件替换的安全沙箱。最大可编辑文件 2MB；扫描超大目录仍需后续优化。新建 Skill 名称限制为小写字母、数字及连字符。
 
