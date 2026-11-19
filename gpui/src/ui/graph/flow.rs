@@ -60,7 +60,7 @@ impl FlowCanvas{
   self.owner.update(cx,|owner,cx|{
    if !owner.composition_ready(window,cx){return false;}
    owner.reference(path.clone(),line,window,cx);
-   owner.selected.as_deref()==Some(path.as_str())
+   true // Accepted; disk loading and source-line navigation complete asynchronously.
   }).unwrap_or(false)
  }
  fn enter(&mut self,target:&str,cx:&mut Context<Self>){

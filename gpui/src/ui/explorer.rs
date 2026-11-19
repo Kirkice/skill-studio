@@ -48,7 +48,7 @@ impl Studio {
         if self.explorer.rows.is_empty(){list=list.child(div().p(px(18.)).text_size(px(12.)).text_color(rgb(DIM)).child(if self.graph.is_some(){"No matching files"}else{"Open a folder to explore its files and Skills."}));}
         div().size_full().min_w(px(0.)).overflow_hidden().bg(rgb(PANEL)).flex().flex_col().child(header).child(actions).child(list)
             .child(div().h(px(38.)).px(px(12.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between()
-                .child(div().text_size(px(10.)).text_color(rgb(DIM)).child("LOCAL WORKSPACE"))
+                .child(div().text_size(px(10.)).text_color(rgb(DIM)).child(if self.workspace_file.is_some(){"SINGLE-FILE SCOPE"}else{"LOCAL WORKSPACE"}))
                 .child(icon_button("new-skill",Icon::Plus,"New Skill",false,self.graph.is_some()).w(px(24.)).h(px(24.)).on_click(cx.listener(|this,_,w,cx|this.command(crate::commands::Command::Create,w,cx)))))
     }
 }

@@ -3,6 +3,7 @@ pub struct Tab<E> {
     pub id: String,
     pub token: u64,
     pub editor: E,
+    pub view: crate::files::View,
     pub original: String,
     pub buffer: gpui::SharedString,
     pub dirty: bool,
@@ -14,7 +15,7 @@ pub struct Tab<E> {
 }
 impl<E> Tab<E> {
     pub fn update_buffer(&mut self,buffer:gpui::SharedString){
-        if self.buffer==buffer{return;}
+        if !self.view.is_text()||self.buffer==buffer{return;}
         self.buffer=buffer;self.dirty=self.buffer.as_ref()!=self.original;
         self.preview_body=None;
         if self.dirty{self.pinned=true;}
@@ -22,8 +23,8 @@ impl<E> Tab<E> {
     }
     pub fn set_original(&mut self,original:String){self.original=original;self.dirty=self.buffer.as_ref()!=self.original;}
     pub fn set_preview(&mut self,value:bool){
-        self.preview=value;
-        if value&&self.preview_body.is_none(){self.preview_body=Some(crate::preview::body(self.buffer.as_ref()).into());}
+        self.preview=value&&self.view.is_text();
+        if self.preview&&self.preview_body.is_none(){self.preview_body=Some(crate::preview::body(self.buffer.as_ref()).into());}
     }
 }
 pub struct Documents<E> { pub tabs: Vec<Tab<E>>, next_token:u64 }
@@ -34,7 +35,7 @@ impl<E> Documents<E> {
     pub fn insert(&mut self,id:String,editor:E,original:String,pinned:bool)->u64{
         self.next_token+=1;let token=self.next_token;
         let buffer=original.clone().into();
-        self.tabs.push(Tab{id,token,editor,original,buffer,dirty:false,preview_body:None,conflict:false,pinned,preview:false,preview_scroll:gpui::ScrollHandle::new()});token
+        self.tabs.push(Tab{id,token,editor,view:Default::default(),original,buffer,dirty:false,preview_body:None,conflict:false,pinned,preview:false,preview_scroll:gpui::ScrollHandle::new()});token
     }
     pub fn remove(&mut self,id:&str)->Option<String>{
         let index=self.tabs.iter().position(|tab|tab.id==id)?;
@@ -73,6 +74,13 @@ impl<E> Documents<E> {
         tab.update_buffer("# A".into());assert!(!tab.dirty);
         tab.update_buffer("# B".into());tab.set_original("# B".into());assert!(!tab.dirty);
         tab.set_preview(true);assert_eq!(tab.preview_body.as_ref().unwrap().as_ref(),"# B");
+    }
+    #[test]fn readonly_files_cannot_become_dirty_or_markdown_previews(){
+        let mut docs=Documents::default();docs.insert("binary.md".into(),(),String::new(),true);
+        let tab=docs.get_mut("binary.md").unwrap();
+        tab.view=crate::files::View::Unsupported{stamp:crate::files::Stamp{bytes:9,modified:None},reason:"binary".into()};
+        tab.update_buffer("accidental edit".into());tab.set_preview(true);
+        assert!(!tab.dirty&&!tab.preview);assert!(tab.buffer.is_empty());assert!(tab.preview_body.is_none());
     }
     #[test]fn reopened_files_get_new_tokens_for_async_result_protection(){
         let mut docs=Documents::default();let old=docs.insert("a".into(),(),String::new(),false);

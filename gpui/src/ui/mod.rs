@@ -6,6 +6,7 @@ mod settings;
 mod preview;
 mod chrome;
 mod explorer;
+mod file_preview;
 use crate::{commands::Command, filter, role, Studio, TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview};
 use controls::*;
 use icons::{icon,Icon,file_icon,command_icon};
@@ -18,7 +19,8 @@ impl Studio {
     fn document_panel(&self,cx:&mut Context<Self>)->Div {
         let dirty=self.dirty(cx);
         let preview=self.is_preview();
-        let markdown=self.selected.as_deref().is_some_and(crate::preview::supported);
+        let text=self.active_text();
+        let markdown=text&&self.selected.as_deref().is_some_and(crate::preview::supported);
         let cursor=self.editor.read(cx).cursor_position();
         let mut panel=div().size_full().min_w(px(0.)).overflow_hidden().bg(rgb(BG)).flex().flex_col();
         if !self.documents.tabs.is_empty(){
@@ -31,7 +33,7 @@ impl Studio {
                 let label=if tab.pinned{label}else{format!("{label} · preview")};
                 tabs=tabs.child(div().id(("document-tab",tab.token)).h_full().flex_none().max_w(px(260.)).px(px(10.)).flex().items_center().gap(px(6.))
                     .bg(rgb(if active{BG}else{PANEL})).border_b_2().border_color(rgb(if active{ACCENT}else{PANEL})).cursor_pointer()
-                    .child(icon(Icon::File).size(px(13.)).text_color(rgb(DIM)))
+                    .child(icon(if matches!(tab.view,crate::files::View::Image{..}){Icon::Image}else{Icon::File}).size(px(13.)).text_color(rgb(DIM)))
                     .child(div().max_w(px(185.)).truncate().text_size(px(12.)).child(label))
                     .children(dirty.then(||div().text_color(rgb(WARNING)).child("●")))
                     .child(icon_button(("close-tab",tab.token),Icon::Close,"Close tab · Ctrl/Cmd+W",false,true).w(px(20.)).h(px(24.))
@@ -44,19 +46,20 @@ impl Studio {
         let title=self.selected.as_deref().and_then(|s|s.rsplit('/').next()).unwrap_or("Document").to_string();
         panel=panel.child(bar().bg(rgb(PANEL)).child(div().w(px(5.)).h(px(5.)).rounded_full().bg(rgb(if dirty{WARNING}else{GREEN})))
             .child(div().flex_1().truncate().text_size(px(12.8)).child(title))
-            .child(icon_button("document-save",Icon::Save,if cfg!(target_os="macos"){"Save document · Cmd+S"}else{"Save document · Ctrl+S"},dirty,self.selected.is_some()&&dirty).on_click(cx.listener(|this,_,w,cx|{if this.dirty(cx){this.save(w,cx)}})))
+            .children(text.then(||icon_button("document-save",Icon::Save,if cfg!(target_os="macos"){"Save document · Cmd+S"}else{"Save document · Ctrl+S"},dirty,dirty).on_click(cx.listener(|this,_,w,cx|{if this.dirty(cx){this.save(w,cx)}}))))
             .children(markdown.then(||icon_button("markdown-preview",if preview{Icon::Code}else{Icon::Eye},if preview{"Show Markdown source · Ctrl/Cmd+Shift+V"}else{"Preview Markdown · Ctrl/Cmd+Shift+V"},preview,true).on_click(cx.listener(|this,_,w,cx|this.toggle_preview(w,cx)))))
-            .child(icon_button("editor-find",Icon::Search,"Find in document · Ctrl/Cmd+F",self.find_open,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|this.open_find(w,cx))))
-            .children((!preview).then(||icon_button("editor-wrap",Icon::Wrap,"Toggle word wrap",self.preferences.soft_wrap,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
-            .children((!preview).then(||icon_button("editor-numbers",Icon::Numbers,"Toggle line numbers",self.preferences.line_numbers,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
+            .children(text.then(||icon_button("editor-find",Icon::Search,"Find in document · Ctrl/Cmd+F",self.find_open,true).on_click(cx.listener(|this,_,w,cx|this.open_find(w,cx)))))
+            .children((text&&!preview).then(||icon_button("editor-wrap",Icon::Wrap,"Toggle word wrap",self.preferences.soft_wrap,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
+            .children((text&&!preview).then(||icon_button("editor-numbers",Icon::Numbers,"Toggle line numbers",self.preferences.line_numbers,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
             .child(icon_button("document-menu",Icon::More,"Document actions",false,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.document_menu=!this.document_menu;cx.notify();}}))));
         if let Some(id)=&self.selected {
             panel=panel.child(div().px(px(14.)).py(px(8.)).text_size(px(11.5)).text_color(rgb(DIM)).truncate().child(id.clone()));
             if self.conflict {
                 panel=panel.child(div().mx(px(12.)).mb(px(8.)).p(px(10.)).rounded(px(6.)).bg(rgb(0x393126)).flex().flex_col().gap(px(8.)).text_color(rgb(WARNING))
-                    .child("This file changed on disk. Your edits are preserved.")
+                    .child("This file changed on disk. Your current view and edits are retained.")
                     .child(icon_button("reload-document",Icon::Refresh,"Reload document from disk",false,true).on_click(cx.listener(|this,_,w,cx|this.reload(w,cx)))));
             }
+            if !text{return panel.child(self.non_text_panel(cx));}
             if self.find_open {
                 let count=self.editor.read(cx).search_session().matcher.label();
                 panel=panel.child(div().px(px(10.)).pb(px(8.)).flex().flex_col().gap(px(6.))
@@ -155,8 +158,11 @@ impl Render for Studio {
         let status=if self.panes.dragging(){"Resize preview · release to apply · Esc to cancel".into()}else{self.status.clone()};
         let titlebar=self.titlebar(root,window,cx);
         let resize_events=chrome::resize_events(cx.entity().downgrade());
-        div().relative().size_full().flex().flex_col().bg(rgb(BG)).text_color(rgb(TEXT)).text_size(px(UI_SIZE)).line_height(px(20.)).font_family(UI_FONT)
+        div().id("studio-root").relative().size_full().flex().flex_col().bg(rgb(BG)).text_color(rgb(TEXT)).text_size(px(UI_SIZE)).line_height(px(20.)).font_family(UI_FONT)
             .track_focus(&self.focus_handle)
+            .on_drop(cx.listener(|this,paths:&ExternalPaths,w,cx|{cx.stop_propagation();this.open_external(paths.paths().to_vec(),w,cx);}))
+            .on_drag_move(cx.listener(|this,_:&DragMoveEvent<ExternalPaths>,_,cx|{if !this.dragging_external{this.dragging_external=true;cx.notify();}}))
+            .on_file_drop_exit(cx.listener(|this,_,_,cx|{if this.dragging_external{this.dragging_external=false;cx.notify();}}))
             .on_action(cx.listener(|this,_:&TogglePalette,w,cx|this.toggle_palette(w,cx)))
             .on_action(cx.listener(|this,_:&FindDocument,w,cx|this.open_find(w,cx)))
             .on_action(cx.listener(|this,_:&SaveDocument,w,cx|this.save(w,cx)))
@@ -176,6 +182,14 @@ impl Render for Studio {
                 .child(div().w(px(5.)).h(px(5.)).rounded_full().bg(rgb(if self.conflict{WARNING}else{GREEN})))
                 .child(div().flex_1().truncate().text_size(px(11.5)).text_color(rgb(MUTED)).child(status))
                 .child(caption(if self.watcher.is_some(){"Live index · Local first"}else{"Local first · Scripts never run"})))
+            .children(self.dragging_external.then(||div().id("external-drop-target").absolute().inset_0().occlude()
+                .on_drop(cx.listener(|this,paths:&ExternalPaths,w,cx|{cx.stop_propagation();this.open_external(paths.paths().to_vec(),w,cx);}))
+                .bg(rgba(0x101a2ba8)).flex().items_center().justify_center()
+                .child(div().mx(px(20.)).p(px(28.)).rounded(px(14.)).border_1().border_color(rgb(ACCENT)).bg(rgb(POPOVER)).shadow_lg().flex().flex_col().items_center().gap(px(12.))
+                    .child(icon(Icon::FolderOpen).size(px(36.)).text_color(rgb(ACCENT)))
+                    .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child("拖入文件或文件夹"))
+                    .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child("文件夹打开工作区 · 文件按内容类型打开"))
+                    .child(div().text_size(px(11.)).text_color(rgb(GREEN)).child("只打开 · 不复制 · 不自动执行")))))
             .children(overlay)
     }
 }

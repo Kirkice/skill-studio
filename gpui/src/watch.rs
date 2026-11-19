@@ -12,6 +12,10 @@ fn relevant(root: &Path, event: &notify::Event) -> bool {
 }
 
 pub fn start(root: &Path) -> Result<(notify::RecommendedWatcher, async_channel::Receiver<()>), String> {
+    start_mode(root,RecursiveMode::Recursive)
+}
+pub fn start_single(root:&Path)->Result<(notify::RecommendedWatcher,async_channel::Receiver<()>),String>{start_mode(root,RecursiveMode::NonRecursive)}
+fn start_mode(root:&Path,mode:RecursiveMode)->Result<(notify::RecommendedWatcher,async_channel::Receiver<()>),String>{
     let root: PathBuf = root.into();
     let watched_root = root.clone();
     let (tx, rx) = mpsc::sync_channel(1024);
@@ -21,7 +25,7 @@ pub fn start(root: &Path) -> Result<(notify::RecommendedWatcher, async_channel::
         // If the queue is full, it already contains an event that forces a full rescan.
         let _ = tx.try_send(());
     }).map_err(|e| e.to_string())?;
-    watcher.watch(&watched_root, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
+    watcher.watch(&watched_root, mode).map_err(|e| e.to_string())?;
     std::thread::spawn(move || {
         while rx.recv().is_ok() {
             std::thread::sleep(Duration::from_millis(150));

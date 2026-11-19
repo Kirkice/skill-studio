@@ -14,6 +14,7 @@ impl Studio {
         self.selected.as_ref().and_then(|id|self.documents.get(id)).is_some_and(|tab|tab.preview)
     }
     pub(super) fn toggle_preview(&mut self,window:&mut Window,cx:&mut Context<Self>){
+        if !self.active_text(){return;}
         let Some(id)=self.selected.clone().filter(|id|preview::supported(id))else{return;};
         if !self.composition_ready(window,cx){return;}
         let Some(tab)=self.documents.get_mut(&id)else{return;};tab.set_preview(!tab.preview);
@@ -34,11 +35,7 @@ impl Studio {
             Ok(path)=>{
                 let root=Path::new(&root).canonicalize().unwrap_or_else(|_|Path::new(&root).into());
                 let Ok(relative)=path.strip_prefix(root)else{return;};let id=relative.to_string_lossy().replace('\\',"/");
-                self.documents.pin(source);self.select_file(id.clone(),true,window,cx);
-                if self.selected.as_deref()==Some(id.as_str())&&preview::supported(&id){
-                    if let Some(tab)=self.documents.get_mut(&id){tab.set_preview(true);}
-                    self.find_open=false;self.focus_handle.focus(window,cx);
-                }
+                self.documents.pin(source);self.request_file(id,true,false,true,window,cx);
                 cx.notify();
             }
             Err(e)=>{self.status=format!("Cannot open preview link: {e}");cx.notify();}

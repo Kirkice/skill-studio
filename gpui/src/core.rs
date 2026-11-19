@@ -136,7 +136,7 @@ fn metadata(content: &str) -> (String, String, Vec<String>) {
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
-fn safe(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub(crate) fn safe(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let p = root.join(relative).canonicalize().map_err(err)?;
     if !p.starts_with(root) {
         return Err("Cannot access files outside the workspace".into());
@@ -204,8 +204,8 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
         };
         known.insert(key.clone());
         let (title, summary, headings) = if ext == "md" {
-            fs::read_to_string(p)
-                .map(|s| metadata(&s))
+            read_document(&root,&key)
+                .map(|doc| metadata(&doc.content))
                 .unwrap_or_default()
         } else {
             Default::default()
@@ -223,7 +223,7 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
         }
     }
     for p in markdown {
-        let content = match fs::read_to_string(&p) {
+        let content = match read_document(&root,&id(&root,&p)).map(|doc|doc.content) {
             Ok(s) => s,
             Err(e) => {
                 graph.warnings.push(format!("{}: {e}", p.display()));
@@ -267,15 +267,50 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
     graph.flows=crate::flow::collect(&graph);
     Ok(graph)
 }
+/// Single-file scope: index the dropped file and bounded direct local references, never its entire parent directory.
+pub fn scan_file(path:&Path)->Result<Graph,String>{
+    let path=path.canonicalize().map_err(err)?;
+    if !fs::metadata(&path).map_err(err)?.is_file(){return Err("Not a regular file".into());}
+    let root=path.parent().ok_or("File has no parent directory")?.to_path_buf();
+    let source=id(&root,&path);
+    let mut graph=Graph{root:root.to_string_lossy().into(),entries:vec![WorkspaceEntry{id:source.clone(),directory:false}],nodes:vec![],edges:vec![],warnings:vec![],flows:vec![]};
+    fn node(root:&Path,path:&Path,key:String)->Node{
+        let label=path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let ext=path.extension().and_then(|e|e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let kind=if label.eq_ignore_ascii_case("SKILL.md"){"skill"}else if ext=="md"{"document"}else if matches!(ext.as_str(),"py"|"sh"|"js"|"ts"|"ps1"|"rs"){"script"}else{"file"};
+        let (title,summary,headings)=if ext=="md"{read_document(root,&key).map(|d|metadata(&d.content)).unwrap_or_default()}else{Default::default()};
+        Node{id:key,label,kind:kind.into(),title,summary,headings}
+    }
+    graph.nodes.push(node(&root,&path,source.clone()));
+    let mut known=HashSet::from([source.clone()]);
+    if matches!(graph.nodes[0].kind.as_str(),"skill"|"document"){
+        if let Ok(doc)=read_document(&root,&source){
+            let refs=references(&doc.content);
+            if refs.len()>128{graph.warnings.push("Single-file index limited to 128 direct references".into());}
+            for (dest,line) in refs.into_iter().take(128){
+                let candidate=root.join(&dest);let canonical=candidate.canonicalize();
+                if canonical.as_ref().is_ok_and(|p|!p.starts_with(&root)){graph.warnings.push(format!("External reference ignored: {dest}"));continue;}
+                let missing=canonical.as_ref().map_or(true,|p|!p.is_file());
+                let key=if missing{format!("missing:{source}:{dest}")}else{id(&root,canonical.as_ref().unwrap())};
+                if known.insert(key.clone()){
+                    if missing{graph.nodes.push(Node{id:key.clone(),label:dest,kind:"missing".into(),title:String::new(),summary:String::new(),headings:vec![]});}
+                    else{graph.nodes.push(node(&root,canonical.as_ref().unwrap(),key.clone()));graph.entries.push(WorkspaceEntry{id:key.clone(),directory:false});}
+                }
+                graph.edges.push(Edge{source:source.clone(),target:key,line,missing});
+            }
+        }
+    }
+    graph.flows=crate::flow::collect(&graph);Ok(graph)
+}
 pub fn read_document(root: &Path, path: &str) -> Result<Document, String> {
     let p = safe(root, path)?;
     let meta = fs::metadata(&p).map_err(err)?;
     if meta.len() > 2_000_000 {
         return Err("Files larger than 2 MB cannot be edited".into());
     }
-    Ok(Document {
-        content: fs::read_to_string(p).map_err(err)?,
-    })
+    let content=fs::read_to_string(p).map_err(err)?;
+    if content.contains('\0'){return Err("Binary content cannot be read as a document".into());}
+    Ok(Document { content })
 }
 pub fn save_document(root: &Path, path: &str, content: &str, original: &str) -> Result<(), String> {
     let p = safe(root, path)?;
@@ -389,6 +424,17 @@ mod tests {
         assert!(graph.entries.iter().any(|e|e.id=="settings.json"&&!e.directory));
         assert!(!graph.entries.iter().any(|e|e.id.starts_with("node_modules")));
         assert_eq!(graph.nodes.len(),1);
+    }
+    #[test]
+    fn single_file_scope_indexes_references_without_scanning_parent(){
+        let temp=tempfile::tempdir().unwrap();let root=temp.path().canonicalize().unwrap();
+        fs::create_dir(root.join("refs")).unwrap();
+        fs::write(root.join("SKILL.md"),"# Main\n\n[Child](refs/child.md)").unwrap();
+        fs::write(root.join("refs/child.md"),"# Child").unwrap();
+        fs::write(root.join("unrelated.md"),"# Not indexed").unwrap();
+        let graph=scan_file(&root.join("SKILL.md")).unwrap();
+        assert_eq!(graph.nodes.len(),2);assert_eq!(graph.edges.len(),1);
+        assert!(!graph.entries.iter().any(|e|e.id=="unrelated.md"));
     }
     #[test]
     fn workspace_boundary_is_enforced() {
