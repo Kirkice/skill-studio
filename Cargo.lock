@@ -5443,11 +5443,13 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "dirs 6.0.0",
+ "embed-resource",
  "gpui-base",
  "gpui-pre",
  "gpui-pre-platform",
  "notify",
  "pulldown-cmark",
+ "raw-window-handle",
  "ropey",
  "serde",
  "serde_json",

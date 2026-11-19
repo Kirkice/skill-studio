@@ -14,15 +14,15 @@ pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, active: 
         .hover(move |style| style.bg(rgb(if enabled { HOVER } else { bg })))
         .children((!label.is_empty()).then_some(label))
 }
-struct Hint(SharedString);
+pub(super) struct Hint(pub SharedString);
 impl Render for Hint {
     fn render(&mut self,_:&mut Window,_:&mut Context<Self>)->impl IntoElement {
-        div().px(px(9.)).py(px(5.)).rounded(px(5.)).bg(rgb(POPOVER)).border_1().border_color(rgb(BORDER)).shadow_sm().text_color(rgb(TEXT)).text_size(px(12.)).font_family(UI_FONT).child(self.0.clone())
+        div().max_w(px(480.)).px(px(9.)).py(px(5.)).rounded(px(5.)).bg(rgb(POPOVER)).border_1().border_color(rgb(BORDER)).shadow_sm().text_color(rgb(TEXT)).text_size(px(12.)).font_family(UI_FONT).child(self.0.clone())
     }
 }
 pub fn icon_button(id:impl Into<ElementId>,glyph:Icon,hint:impl Into<SharedString>,active:bool,enabled:bool)->Stateful<Div> {
     let hint=hint.into();
-    button(id,"",active,enabled).group("icon-button").w(px(28.)).px(px(0.)).gap(px(0.)).child(icon(glyph).size(px(15.)).text_color(rgb(if !enabled{DIM}else if active{TEXT}else{MUTED})).group_hover("icon-button",move|style|style.text_color(rgb(if enabled{TEXT}else{DIM}))))
+    button(id,"",active,enabled).aria_label(hint.clone()).group("icon-button").w(px(28.)).px(px(0.)).gap(px(0.)).child(icon(glyph).size(px(15.)).text_color(rgb(if !enabled{DIM}else if active{TEXT}else{MUTED})).group_hover("icon-button",move|style|style.text_color(rgb(if enabled{TEXT}else{DIM}))))
         .tooltip(move|_,cx|cx.new(|_|Hint(hint.clone())).into())
 }
 pub fn swatch(id:impl Into<ElementId>,color:u32,hint:&'static str,selected:bool)->Stateful<Div> {
@@ -33,8 +33,11 @@ pub fn swatch(id:impl Into<ElementId>,color:u32,hint:&'static str,selected:bool)
 pub fn icon_label(id:impl Into<ElementId>,glyph:Icon,label:impl Into<SharedString>,active:bool,enabled:bool)->Stateful<Div> {
     button(id,"",active,enabled).child(icon(glyph).size(px(14.)).text_color(rgb(if !enabled{DIM}else if active{TEXT}else{MUTED}))).child(label.into())
 }
-pub fn primary(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    button(id,label,false,true).bg(rgb(ACCENT)).text_color(rgb(BG)).font_weight(FontWeight::SEMIBOLD).hover(|s|s.bg(rgb(0xb0cbef)))
+pub fn primary_icon(id:impl Into<ElementId>,glyph:Icon,hint:impl Into<SharedString>)->Stateful<Div>{
+    let hint=hint.into();
+    button(id,"",false,true).aria_label(hint.clone()).w(px(34.)).h(px(32.)).px(px(0.)).bg(rgb(ACCENT)).hover(|s|s.bg(rgb(0xb0cbef)))
+        .child(icon(glyph).size(px(17.)).text_color(rgb(BG)))
+        .tooltip(move|_,cx|cx.new(|_|Hint(hint.clone())).into())
 }
 pub fn input(id: &'static str, state: &Entity<InputState>) -> InputBase {
     let focus = state.clone();

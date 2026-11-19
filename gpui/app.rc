@@ -1,0 +1,2 @@
+// GPUI loads icon resource ID 1; Explorer and the taskbar share this icon.
+1 ICON "assets/icon.ico"

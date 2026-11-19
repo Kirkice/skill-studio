@@ -6,7 +6,7 @@ pub const ACCENTS: &[(&str,u32)] = &[("Blue",0x96b2d7),("Violet",0xb5a2ce),("Tea
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {pub theme:String,pub accent:u32,pub font_size:u16,pub soft_wrap:bool,pub line_numbers:bool}
-impl Default for Settings {fn default()->Self {Self {theme:"graphite".into(),accent:ACCENTS[0].1,font_size:14,soft_wrap:false,line_numbers:true}}}
+impl Default for Settings {fn default()->Self {Self {theme:"graphite".into(),accent:ACCENTS[0].1,font_size:14,soft_wrap:true,line_numbers:true}}}
 impl Settings {
  pub fn validate(&self)->Result<(),String> {
   if !THEMES.contains(&self.theme.as_str()) {return Err("Unknown theme preset".into());}
@@ -29,6 +29,10 @@ pub fn save(settings:&Settings)->Result<(),String> {
 }
 #[cfg(test)] mod tests {
  use super::*;
- #[test] fn defaults_and_round_trip(){let s=Settings::default();s.validate().unwrap();let copy:Settings=serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();assert_eq!(copy.theme,s.theme);assert_eq!(copy.font_size,14);}
+ #[test] fn defaults_and_round_trip(){let s=Settings::default();s.validate().unwrap();let copy:Settings=serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();assert_eq!(copy.theme,s.theme);assert_eq!(copy.font_size,14);assert!(copy.soft_wrap);}
+ #[test] fn missing_wrap_defaults_to_enabled_and_explicit_choice_is_preserved(){
+  let legacy:Settings=serde_json::from_str("{}").unwrap();assert!(legacy.soft_wrap);
+  let explicit:Settings=serde_json::from_str(r#"{"soft_wrap":false}"#).unwrap();assert!(!explicit.soft_wrap);
+ }
  #[test] fn rejects_invalid_preferences(){let mut s=Settings::default();s.font_size=500;assert!(s.validate().is_err());s.font_size=13;s.theme="unknown".into();assert!(s.validate().is_err());}
 }

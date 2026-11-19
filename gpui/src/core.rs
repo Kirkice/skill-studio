@@ -8,7 +8,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Node {
     pub id: String,
     pub label: String,
@@ -17,20 +17,24 @@ pub struct Node {
     pub summary: String,
     pub headings: Vec<String>,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Edge {
     pub source: String,
     pub target: String,
     pub line: usize,
     pub missing: bool,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Graph {
     pub root: String,
+    pub entries: Vec<WorkspaceEntry>,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub warnings: Vec<String>,
+    pub flows: Vec<crate::flow::Flow>,
 }
+#[derive(Clone, Serialize)]
+pub struct WorkspaceEntry { pub id:String, pub directory:bool }
 #[derive(Serialize)]
 pub struct Document {
     pub content: String,
@@ -155,8 +159,10 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
     let mut graph = Graph {
         root: root.to_string_lossy().into(),
         nodes: vec![],
+        entries: vec![],
         edges: vec![],
         warnings: vec![],
+        flows: vec![],
     };
     let mut known = HashSet::new();
     let mut markdown = vec![];
@@ -177,6 +183,9 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
                 continue;
             }
         };
+        if entry.depth()>0&&(entry.file_type().is_dir()||entry.file_type().is_file()){
+            graph.entries.push(WorkspaceEntry{id:id(&root,entry.path()),directory:entry.file_type().is_dir()});
+        }
         if !entry.file_type().is_file() {
             continue;
         }
@@ -255,6 +264,7 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
         }
     }
     graph.nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    graph.flows=crate::flow::collect(&graph);
     Ok(graph)
 }
 pub fn read_document(root: &Path, path: &str) -> Result<Document, String> {
@@ -367,6 +377,18 @@ mod tests {
         write_document(&path, b"new").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o751);
+    }
+    #[test]
+    fn explorer_lists_empty_folders_and_other_files_without_adding_graph_nodes(){
+        let temp=tempfile::tempdir().unwrap();let root=temp.path().canonicalize().unwrap();
+        fs::create_dir(root.join("empty")).unwrap();fs::create_dir(root.join("node_modules")).unwrap();
+        fs::write(root.join("SKILL.md"),"# Test").unwrap();fs::write(root.join("settings.json"),"{}").unwrap();
+        fs::write(root.join("node_modules/hidden.json"),"{}").unwrap();
+        let graph=scan_workspace(&root).unwrap();
+        assert!(graph.entries.iter().any(|e|e.id=="empty"&&e.directory));
+        assert!(graph.entries.iter().any(|e|e.id=="settings.json"&&!e.directory));
+        assert!(!graph.entries.iter().any(|e|e.id.starts_with("node_modules")));
+        assert_eq!(graph.nodes.len(),1);
     }
     #[test]
     fn workspace_boundary_is_enforced() {

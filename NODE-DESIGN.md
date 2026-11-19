@@ -1,23 +1,45 @@
-# GPUI 节点与图谱设计
+# Native graph node design
 
-## 分类
+## Visual reference
 
-主 Skill（紫）、关联 Skill（靛蓝）、内部子流程（蓝）、参考文档（灰蓝）、执行脚本（绿）、资源文件（浅灰）、失效引用（红）。颜色为展示分类，不代表可执行流程或运行时调用。
+Inspired by the hierarchy and selection language of RenderMax's `qrenderdoc/Windows/RenderGraphViewer.cpp` (PassItem and dependency paths), implemented with GPUI rather than embedding Qt or depending on RenderMax.
 
-SKILL.md 是独立 Skill；无其他 Skill 直接引用时显示为主 Skill。被 Skill 直接引用且标题含流程语义的 Markdown 可推定为内部子流程，普通 Markdown 不因此成为独立 Skill。编辑面板可循环指定分类，最后一项后恢复自动识别。
+- Quiet rounded surfaces, restrained shadows and a narrow category accent rail.
+- Category/icon header, wrapped title, source filename, details, separated source actions.
+- Main Skill: violet; subflow: teal; phase/step: blue. References retain their file-role colors.
+- Flow cards are 320 world units wide and 214–290 high depending on semantic fields; file cards are 264 × 188. Automatic spacing accounts for card height; existing saved file positions are not rewritten.
+- At distant Flow zoom (<38%), only category and title remain, avoiding illegible metadata.
 
-## 信息
+## Semantic information
 
-节点显示类型、原文标题或文件名、相对路径、摘要、前三个章节以及去重的引用/被引用数量。当前节点尺寸为 240×140 个逻辑像素，随画布缩放；内容过多时裁剪。
+- Action title removes Phase/Step numbering, retaining the source wording. An English Skill title may use an explicitly stated Chinese mission as an extractive title; this is not model paraphrasing or translation.
+- Prefer explicit mission/purpose sections. Ordinary paragraph fallback is labelled 原文, not presented as an authored purpose.
+- Show condition and user-confirmation tags only when supported by the heading/body. Negated confirmation statements such as 无需用户确认 do not become confirmation gates.
+- Input/output appear only when explicitly labelled or in matching sections; example code is not treated as a real contract.
+- Every field retains source line evidence. A call inheriting its stage's condition navigates to the caller, while its purpose and contracts navigate to the target document.
+- Entry-level semantics stop before explicit numbered stages to avoid attributing a later step's output to the whole Skill.
+- Dynamic heights are used by layout, ports, arrows and fit-to-view; metadata moves below the purpose instead of dominating the card.
 
-## 布局与交互
+## Selection
 
-自动布局按入边和引用遍历分层，无入边节点作为起点；循环分量单独选择起点并使用已访问集合终止遍历。布局按可见节点重新计算，手动坐标优先。
+- Clicked Flow cards are keyed by their graph-instance ID, not document path. Repeated calls to one document can therefore be selected independently.
+- Selected Flow card: warm amber 2px border, raised surface and SELECTED indicator.
+- Incoming edges: amber (`#ffb800`); outgoing edges: green (`#1fe482`). Connected strokes and ports become heavier with a subtle halo.
+- Non-incident edges become quieter rather than competing with the selected path.
+- References use the same direction-dependent edge styling and a warm card border; the Overview navigator continues to reflect selected files.
+- Flow background click clears selection. Returning via breadcrumbs restores the previous card selection along with the camera.
 
-节点可拖动，松开后自动保存到用户配置目录。失效引用线使用红色虚线。点击引用线上的行号标签打开来源文档并移动到引用行。缩略图为只读概览，暂不支持在缩略图内拖动视口。
+Selection colors indicate focus and direction, NOT execution status, success/failure or confirmed control flow. Candidate Flow edges remain dashed.
 
-个人布局和节点分类不改写 Skill 文件；JSON 导入与导出可显式共享。导入旧版负坐标会将布局整体平移，保留节点相对位置。
+## Preserved actions
 
-## 性能与验证
+- Single-click main/sub Skill opens its Markdown; single-click stage locates the source line.
+- Double-click sub Skill enters its graph. No embedded collapse/expand.
+- Source and call-site footer buttons both select the associated card and open the relevant Markdown location.
+- Right-drag camera panning does not select cards, mutate file contents or save node positions.
 
-当前实现优先完成原生迁移。拖动会通知顶层视图重新绘制；节点分类和统计仍有重复边扫描，尚未做大型图谱帧率验收。后续应将图谱绘制拆分为独立实体并缓存索引。
+## Code
+
+- `gpui/src/ui/graph/flow.rs`: flow card hierarchy, per-instance selection, camera navigation.
+- `gpui/src/ui/graph.rs`: file cards and reference links.
+- `gpui/src/ui/graph/visual.rs`: shared directional selection styles and strokes/ports.

@@ -1,1 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#101827"/><path d="M256 76L436 256 256 436 76 256Z" fill="none" stroke="#a78bfa" stroke-width="26"/><path d="M166 256H346M256 166V346" stroke="#60a5fa" stroke-width="20"/><circle cx="256" cy="256" r="38" fill="#c4b5fd"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Skill Rider — document and orchestration</title>
+  <rect x="8" y="8" width="496" height="496" rx="112" fill="#101824" stroke="#25374c" stroke-width="4"/>
+  <path d="M164 80h136l96 96v204a52 52 0 0 1-52 52H164a52 52 0 0 1-52-52V132a52 52 0 0 1 52-52Z" fill="#1b2a40" stroke="#415d7d" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M300 80v68a28 28 0 0 0 28 28h68Z" fill="#315578"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="20">
+    <path d="M228 166v174" stroke="#8cbbfa"/>
+    <path d="M228 232h72a16 16 0 0 1 16 16v44M228 312h-64" stroke="#47d8c1"/>
+  </g>
+  <circle cx="228" cy="166" r="30" fill="#9cc7ff"/><circle cx="228" cy="166" r="12" fill="#1b2a40"/>
+  <circle cx="228" cy="248" r="22" fill="#d8e9ff"/>
+  <circle cx="228" cy="340" r="26" fill="#9cc7ff"/><circle cx="228" cy="340" r="10" fill="#1b2a40"/>
+  <circle cx="316" cy="292" r="24" fill="#47d8c1"/><circle cx="164" cy="312" r="16" fill="#47d8c1"/>
+</svg>

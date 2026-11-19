@@ -32,11 +32,11 @@ impl Studio {
      .child(icon_button("font-smaller",Icon::Minus,"Decrease editor font size",false,self.preferences.font_size>10).on_click(cx.listener(|this,_,w,cx|{this.preferences.font_size=this.preferences.font_size.saturating_sub(1).max(10);this.apply_preferences(w,cx);})))
      .child(format!("{} px",self.preferences.font_size))
      .child(icon_button("font-larger",Icon::Plus,"Increase editor font size",false,self.preferences.font_size<24).on_click(cx.listener(|this,_,w,cx|{this.preferences.font_size=(this.preferences.font_size+1).min(24);this.apply_preferences(w,cx);})))))
-    .child(div().flex().items_center().justify_between().child("Word wrap").child(button("settings-wrap",if self.preferences.soft_wrap{"On"}else{"Off"},self.preferences.soft_wrap,true).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
-    .child(div().flex().items_center().justify_between().child("Line numbers").child(button("settings-numbers",if self.preferences.line_numbers{"On"}else{"Off"},self.preferences.line_numbers,true).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
+    .child(div().flex().items_center().justify_between().child("Word wrap").child(icon_button("settings-wrap",if self.preferences.soft_wrap{Icon::ToggleOn}else{Icon::ToggleOff},if self.preferences.soft_wrap{"Word wrap enabled — click to disable"}else{"Word wrap disabled — click to enable"},self.preferences.soft_wrap,true).w(px(38.)).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
+    .child(div().flex().items_center().justify_between().child("Line numbers").child(icon_button("settings-numbers",if self.preferences.line_numbers{Icon::ToggleOn}else{Icon::ToggleOff},if self.preferences.line_numbers{"Line numbers enabled — click to disable"}else{"Line numbers disabled — click to enable"},self.preferences.line_numbers,true).w(px(38.)).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
     .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child("Changes apply immediately and are saved on this device.")))
    .child(div().px(px(20.)).py(px(12.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between()
-    .child(icon_label("reset-settings",Icon::Undo,"Restore defaults",false,true).on_click(cx.listener(|this,_,w,cx|{this.preferences=settings::Settings::default();this.apply_preferences(w,cx);})))
+    .child(icon_button("reset-settings",Icon::Undo,"Restore default settings",false,true).on_click(cx.listener(|this,_,w,cx|{this.preferences=settings::Settings::default();this.apply_preferences(w,cx);})))
     .child(caption("No workspace files are modified")))
  }
 }

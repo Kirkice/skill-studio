@@ -8,14 +8,21 @@ mod highlight;
 mod commands;
 mod ui;
 mod settings;
+mod documents;
+mod preview;
+mod flow;
+mod meaning;
+mod panes;
+mod explorer;
 use gpui::*;
-use gpui_base::input::{EditorState, InputState};
-actions!(studio, [TogglePalette, SaveDocument, CloseOverlay, FindDocument]);
+use gpui_base::input::{EditorState, InputState, InputEvent};
+actions!(studio, [TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview]);
 
-struct Studio { find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, drag: Option<(String, Point<Pixels>, layout::Position)>, zoom: f32, drag_moved: bool, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
+struct Studio { explorer:explorer::Explorer, panes:panes::Panes, flow_canvas:Option<Entity<ui::graph::flow::FlowCanvas>>, flow_mode:bool, documents:documents::Documents<Entity<EditorState>>, graph_canvas: Option<Entity<ui::graph::GraphCanvas>>, graph_revision: u64, saving: bool, refreshing: bool, refresh_pending: bool, find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, zoom: f32, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
 impl Studio {
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.is_none(){return;}
+        if let Some(id)=&self.selected{if let Some(tab)=self.documents.get_mut(id){tab.preview=false;}}
         self.find_open=true;
         self.find_query.update(cx,|s,cx|s.focus(window,cx));
         let query=self.find_query.read(cx).value().to_string();
@@ -26,9 +33,13 @@ impl Studio {
     }
     fn apply_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         ui::theme::install(&self.preferences,cx);
-        let ext=self.selected.as_deref().and_then(|s|std::path::Path::new(s).extension()).and_then(|s|s.to_str()).unwrap_or("txt").to_string();
+        if let Some(canvas)=&self.graph_canvas{canvas.update(cx,|_,cx|cx.notify());}
+        if let Some(canvas)=&self.flow_canvas{canvas.update(cx,|_,cx|cx.notify());}
         let wrap=self.preferences.soft_wrap;let numbers=self.preferences.line_numbers;
-        self.editor.update(cx,|editor,cx|{editor.set_editor_style(ui::theme::editor_style());editor.set_soft_wrap(wrap,window,cx);editor.set_line_number(numbers,window,cx);editor.set_highlighter(ext,cx);});
+        for tab in &self.documents.tabs{
+            let ext=std::path::Path::new(&tab.id).extension().and_then(|e|e.to_str()).unwrap_or("txt").to_string();
+            tab.editor.update(cx,|editor,cx|{editor.set_editor_style(ui::theme::editor_style());editor.set_soft_wrap(wrap,window,cx);editor.set_line_number(numbers,window,cx);editor.set_highlighter(ext,cx);});
+        }
         for input in [&self.search,&self.skill_name,&self.command_search,&self.find_query,&self.replace_query] {input.update(cx,|state,_|state.set_editor_style(ui::theme::input_style()));}
         self.status=match settings::save(&self.preferences){Ok(())=>"Settings saved".into(),Err(e)=>format!("Settings applied, but could not be saved: {e}")};
         cx.notify();
@@ -37,30 +48,101 @@ impl Studio {
         self.palette=false;self.creating=false;self.document_menu=false;self.role_menu=false;
         self.settings_open=!self.settings_open;self.focus_handle.focus(window,cx);cx.notify();
     }
-    fn dirty(&self, cx: &App) -> bool { self.selected.is_some() && self.editor.read(cx).value().as_ref() != self.original }
-    fn guard(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.dirty(cx) { self.status = "Unsaved changes. Save or discard before continuing.".into(); cx.notify(); false } else { true }
+    fn dirty(&self,_cx:&App)->bool{self.selected.as_ref().and_then(|id|self.documents.get(id)).is_some_and(|tab|tab.dirty)}
+    fn tab_dirty(&self,id:&str,_cx:&App)->bool{
+        self.documents.get(id).is_some_and(|tab|tab.dirty)
     }
-    fn save(&mut self, cx: &mut Context<Self>) {
-        let (Some(graph), Some(id)) = (&self.graph, &self.selected) else { return };
-        let content = self.editor.read(cx).value().to_string();
-        match core::save_document(std::path::Path::new(&graph.root), id, &content, &self.original) {
-            Ok(()) => {
-                self.generation += 1;
-                self.original = content;
-                self.conflict = false;
-                match core::scan_workspace(std::path::Path::new(&graph.root)) {
-                    Ok(updated) => { self.graph = Some(updated); self.status = "Saved".into(); }
-                    Err(e) => self.status = format!("Saved, but indexing failed: {e}"),
+    fn guard(&mut self,cx:&mut Context<Self>)->bool{
+        if self.saving{self.status="Save in progress. Please wait.".into();cx.notify();return false;}
+        if self.documents.tabs.iter().any(|tab|self.tab_dirty(&tab.id,cx)){
+            self.status="Unsaved tabs. Save or close each modified tab before changing workspace or exiting.".into();cx.notify();return false;
+        }true
+    }
+    fn save(&mut self,window:&mut Window,cx:&mut Context<Self>){
+        if let Some(id)=self.selected.clone(){self.save_tab(id,false,window,cx);}
+    }
+    fn save_tab(&mut self,id:String,close_after:bool,window:&mut Window,cx:&mut Context<Self>){
+        if self.selected.as_deref()==Some(id.as_str())&&!self.composition_ready(window,cx){return;}
+        if self.saving{return;}
+        let (Some(graph),Some(tab))=(&self.graph,self.documents.get(&id))else{return;};
+        let root=graph.root.clone();let token=tab.token;
+        let content=tab.editor.read(cx).value().to_string();let original=tab.original.clone();
+        self.documents.pin(&id);self.saving=true;self.status="Saving…".into();cx.notify();
+        cx.spawn_in(window,async move|this,cx|{
+            let save_root=root.clone();let save_id=id.clone();let saved=content.clone();
+            let result=cx.background_executor().spawn(async move{core::save_document(std::path::Path::new(&save_root),&save_id,&saved,&original)}).await;
+            let _=this.update_in(cx,|this,window,cx|{
+                this.saving=false;
+                if this.graph.as_ref().map(|g|g.root.as_str())!=Some(root.as_str()){return;}
+                match result{
+                    Ok(())=>{
+                        let mut can_close=false;
+                        if let Some(tab)=this.documents.get_mut(&id).filter(|tab|tab.token==token){
+                            tab.set_original(content.clone());tab.conflict=false;
+                            can_close=tab.editor.read(cx).value().as_ref()==content;
+                        }
+                        if this.selected.as_deref()==Some(&id){this.original=content;this.conflict=false;}
+                        if close_after&&can_close{this.remove_tab(&id,window,cx);}
+                        this.generation+=1;this.status=if close_after&&!can_close{"Saved snapshot; newer edits kept open"}else{"Saved"}.into();
+                        this.refresh(window,cx);
+                    }
+                    Err(e)=>{this.status=format!("Save failed: {e}");if this.refresh_pending{this.refresh(window,cx);}}
+                }cx.notify();
+            });
+        }).detach();
+    }
+    fn composition_ready(&mut self,window:&mut Window,cx:&mut Context<Self>)->bool{
+        let composing=self.selected.is_some()&&self.editor.update(cx,|editor,cx|editor.marked_text_range(window,cx).is_some());
+        if composing{self.status="Finish IME input with Enter or Esc before switching tabs".into();cx.notify();}
+        !composing
+    }
+    fn activate_tab(&mut self,id:&str,window:&mut Window,cx:&mut Context<Self>){
+        if self.selected.as_deref()!=Some(id)&&!self.composition_ready(window,cx){return;}
+        let Some(tab)=self.documents.get(id)else{return;};
+        self.explorer.reveal(id);
+        self.selected=Some(id.into());self.editor=tab.editor.clone();self.original=tab.original.clone();self.conflict=tab.conflict;
+        self.role_menu=false;self.document_menu=false;
+        if self.find_open{let query=self.find_query.read(cx).value().to_string();self.editor.update(cx,|e,cx|e.set_search_query(query,true,cx));}
+        if tab.preview{self.focus_handle.focus(window,cx);}else{self.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();
+    }
+    fn remove_tab(&mut self,id:&str,window:&mut Window,cx:&mut Context<Self>){
+        let active=self.selected.as_deref()==Some(id);
+        let next=self.documents.remove(id);
+        if active{
+            self.selected=None;self.original.clear();self.conflict=false;
+            if let Some(next)=next{self.activate_tab(&next,window,cx);}else{self.find_open=false;self.focus_handle.focus(window,cx);}
+        }cx.notify();
+    }
+    fn close_tab(&mut self,id:String,window:&mut Window,cx:&mut Context<Self>){
+        if self.selected.as_deref()==Some(id.as_str())&&!self.composition_ready(window,cx){return;}
+        if self.saving{self.status="Wait for the current save to finish".into();cx.notify();return;}
+        let Some(tab)=self.documents.get(&id)else{return;};
+        if !self.tab_dirty(&id,cx){self.remove_tab(&id,window,cx);return;}
+        let token=tab.token;let before=tab.editor.read(cx).value();
+        let answer=window.prompt(PromptLevel::Warning,"Save changes before closing?",Some(&id),&[PromptButton::ok("Save"),PromptButton::ok("Discard"),PromptButton::cancel("Cancel")],cx);
+        cx.spawn_in(window,async move|this,cx|{
+            let answer=answer.await.ok();
+            let _=this.update_in(cx,|this,window,cx|{
+                let Some(tab)=this.documents.get(&id).filter(|tab|tab.token==token)else{return;};
+                if this.saving{return;}
+                match answer{
+                    Some(0)=>this.save_tab(id,true,window,cx),
+                    Some(1) if tab.editor.read(cx).value()==before=>this.remove_tab(&id,window,cx),
+                    Some(1)=>{this.status="Document changed while confirming; tab kept open".into();cx.notify();},
+                    _=>{}
                 }
-            }
-            Err(e) => self.status = format!("Save failed: {e}"),
-        }
-        cx.notify();
+            });
+        }).detach();
+    }
+    fn close_other_saved_tabs(&mut self,cx:&mut Context<Self>){
+        if self.saving{return;}
+        let ids:Vec<_>=self.documents.tabs.iter().filter(|tab|Some(&tab.id)!=self.selected.as_ref()&&!self.tab_dirty(&tab.id,cx)).map(|tab|tab.id.clone()).collect();
+        for id in ids{self.documents.remove(&id);}cx.notify();
     }
     fn reference(&mut self, source: String, line: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.select(source.clone(), window, cx);
         if self.selected.as_deref() == Some(&source) {
+            if let Some(tab)=self.documents.get_mut(&source){tab.preview=false;}
             self.editor.update(cx, |editor, cx| editor.set_cursor_position(gpui_base::input::Position::new(line.saturating_sub(1).min(u32::MAX as usize) as u32, 0), window, cx));
             self.status = format!("Reference: {source} · line {line}"); cx.notify();
         }
@@ -72,12 +154,13 @@ impl Studio {
         self.document_menu = false;
         self.focus_handle.focus(window,cx);
         match command {
-            commands::Command::Open => self.open(window,cx), commands::Command::Refresh => self.refresh(window,cx), commands::Command::Save => self.save(cx), commands::Command::SaveLayout => self.save_layout(cx), commands::Command::Import => self.import_layout(window,cx), commands::Command::Export => self.export_layout(window,cx), commands::Command::Reset => self.reset_layout(cx), commands::Command::Create => {self.creating=true;self.skill_name.update(cx,|input,cx|input.focus(window,cx));}, commands::Command::Settings => self.open_settings(window,cx), commands::Command::Close => {},
+            commands::Command::Open => self.open(window,cx), commands::Command::Refresh => self.refresh(window,cx), commands::Command::Save => self.save(window,cx), commands::Command::SaveLayout => self.save_layout(cx), commands::Command::Import => self.import_layout(window,cx), commands::Command::Export => self.export_layout(window,cx), commands::Command::Reset => self.reset_layout(cx), commands::Command::Create => {self.creating=true;self.skill_name.update(cx,|input,cx|input.focus(window,cx));}, commands::Command::Settings => self.open_settings(window,cx), commands::Command::Close => {},
         }
         cx.notify();
     }
     fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette=false; self.creating=false; self.role_menu=false; self.document_menu=false; self.settings_open=false;
+        if let Some(canvas)=&self.graph_canvas{canvas.update(cx,|canvas,cx|canvas.close_reference_menu(cx));}
         if self.find_open{self.close_find(window,cx);}else{self.focus_handle.focus(window,cx);}
         cx.notify();
     }
@@ -153,74 +236,72 @@ impl Studio {
         self.watcher = Some(watcher);
         cx.spawn_in(window, async move |this, cx| {
             while events.recv().await.is_ok() {
-                let snapshot = this.update_in(cx, |studio, _, _| {
-                    if studio.graph.as_ref().map(|g| &g.root) != Some(&root) { return None; }
-                    studio.generation += 1;
-                    Some((studio.generation, studio.selected.clone(), studio.original.clone()))
+                let active=this.update_in(cx,|studio,window,cx|{
+                    if studio.graph.as_ref().map(|g|g.root.as_str())!=Some(root.as_str()){return false;}
+                    studio.refresh(window,cx);true
                 });
-                let Ok(Some((generation, selected, original))) = snapshot else { break };
-                let scan_root = root.clone();
-                let scan_selected = selected.clone();
-                let result = cx.background_executor().spawn(async move {
-                    let path = std::path::Path::new(&scan_root);
-                    let graph = core::scan_workspace(path);
-                    let document = scan_selected.map(|id| core::read_document(path, &id));
-                    (graph, document)
-                }).await;
-                let applied = this.update_in(cx, |studio, _, cx| {
-                    if studio.generation != generation || studio.graph.as_ref().map(|g| &g.root) != Some(&root) { return; }
-                    match result.0 {
-                        Ok(graph) => studio.graph = Some(graph),
-                        Err(e) => { studio.status = format!("Automatic refresh failed: {e}"); cx.notify(); return; }
-                    }
-                    if studio.selected == selected && studio.original == original {
-                        studio.conflict = result.1.is_some_and(|doc| doc.map_or(true, |doc| doc.content != original));
-                    }
-                    if studio.conflict { studio.status = "File changed or deleted externally; editor content retained".into(); }
-                    cx.notify();
-                });
-                if applied.is_err() { break; }
+                if !matches!(active,Ok(true)){break;}
             }
         }).detach();
     }
-    fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(root) = self.graph.as_ref().map(|g| g.root.clone()) else { return };
-        self.generation += 1;
-        let generation = self.generation;
-        let selected = self.selected.clone();
-        let original = self.original.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let scan_root = root.clone();
-            let scan_selected = selected.clone();
-            let (graph, document) = cx.background_executor().spawn(async move {
-                let path = std::path::Path::new(&scan_root);
-                (core::scan_workspace(path), scan_selected.map(|id| core::read_document(path, &id)))
+    fn refresh(&mut self, window:&mut Window, cx:&mut Context<Self>){
+        if self.graph.is_none(){return;}
+        self.refresh_pending=true;
+        if self.saving||self.refreshing{return;}
+        self.refreshing=true;
+        let root=self.graph.as_ref().unwrap().root.clone();
+        cx.spawn_in(window,async move|this,cx|{
+            // One debounce window for manual refresh + atomic-write watcher events.
+            cx.background_executor().timer(std::time::Duration::from_millis(220)).await;
+            let snapshot=this.update_in(cx,|studio,window,cx|{
+                if studio.graph.as_ref().map(|g|g.root.as_str())!=Some(root.as_str())||studio.saving{
+                    studio.refreshing=false;
+                    if studio.refresh_pending&&!studio.saving{studio.refresh(window,cx);}
+                    return None;
+                }
+                studio.refresh_pending=false;studio.generation+=1;
+                Some((studio.generation,studio.documents.tabs.iter().map(|tab|(tab.id.clone(),tab.token,tab.original.clone())).collect::<Vec<_>>()))
+            });
+            let Ok(Some((generation,sessions)))=snapshot else{return;};
+            let scan_root=root.clone();
+            let (graph,document)=cx.background_executor().spawn(async move{
+                let path=std::path::Path::new(&scan_root);
+                (core::scan_workspace(path),sessions.into_iter().map(|(id,token,original)|{let doc=core::read_document(path,&id);(id,token,original,doc)}).collect::<Vec<_>>())
             }).await;
-            let _ = this.update_in(cx, |studio, _, cx| {
-                if studio.generation != generation || studio.graph.as_ref().map(|g| &g.root) != Some(&root) { return; }
-                match graph {
-                    Ok(graph) => { studio.graph = Some(graph); studio.status = "Index refreshed".into(); }
-                    Err(e) => { studio.status = format!("Refresh failed: {e}"); cx.notify(); return; }
+            let _=this.update_in(cx,|studio,window,cx|{
+                studio.refreshing=false;
+                if studio.graph.as_ref().map(|g|g.root.as_str())!=Some(root.as_str()){
+                    if studio.refresh_pending{studio.refresh(window,cx);}return;
                 }
-                if studio.selected == selected && studio.original == original {
-                    studio.conflict = document.is_some_and(|doc| doc.map_or(true, |doc| doc.content != original));
-                }
-                if studio.conflict { studio.status = "File changed or deleted externally; editor content retained".into(); }
+                if studio.generation==generation&&!studio.saving{
+                    match graph{
+                        Ok(graph)=>{studio.graph_revision+=1;studio.graph=Some(graph);studio.status="Index refreshed".into();}
+                        Err(e)=>{studio.status=format!("Refresh failed: {e}");}
+                    }
+                    for(id,token,original,doc)in document{
+                        if let Some(tab)=studio.documents.get_mut(&id).filter(|tab|tab.token==token&&tab.original==original){
+                            tab.conflict=doc.map_or(true,|doc|doc.content!=original);
+                        }
+                    }
+                    studio.conflict=studio.selected.as_ref().and_then(|id|studio.documents.get(id)).is_some_and(|tab|tab.conflict);
+                    if studio.conflict{studio.status="File changed or deleted externally; editor content retained".into();}
+                }else{studio.refresh_pending=true;}
+                if studio.refresh_pending{studio.refresh(window,cx);}
                 cx.notify();
             });
         }).detach();
     }
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.guard(cx) { return; }
+        if self.saving||self.dirty(cx){self.status="Save or discard this tab before reloading".into();cx.notify();return;}
         let (Some(graph), Some(id)) = (&self.graph, &self.selected) else { return };
         match core::read_document(std::path::Path::new(&graph.root), id) {
-            Ok(doc) => { self.original = doc.content.clone(); self.editor.update(cx, |editor, cx| editor.set_value(doc.content, window, cx)); self.conflict = false; self.status = "Reloaded from disk".into(); }
+            Ok(doc) => { self.original = doc.content.clone(); if let Some(tab)=self.documents.get_mut(id){tab.set_original(doc.content.clone());tab.conflict=false;} self.editor.update(cx, |editor, cx| editor.set_value(doc.content, window, cx)); self.conflict = false; self.status = "Reloaded from disk".into(); }
             Err(e) => self.status = format!("Reload failed: {e}"),
         }
         cx.notify();
     }
     fn discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.dirty(cx) { return; }
+        if self.saving || !self.dirty(cx) { return; }
         let selected = self.selected.clone();
         let before = self.editor.read(cx).value();
         let answer = window.prompt(PromptLevel::Warning, "Discard unsaved changes?", Some("This restores the content last opened or saved."), &[PromptButton::ok("Discard changes"), PromptButton::cancel("Cancel")], cx);
@@ -247,23 +328,50 @@ impl Studio {
             let result = cx.background_executor().spawn(async move { core::open_workspace(&path) }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 match result {
-                    Ok(graph) => { if !this.guard(cx) { return; } this.generation += 1; this.status = format!("{} files · {} references", graph.nodes.len(), graph.edges.len()); let loaded = layout::load(&graph.root); let loaded = loaded.unwrap_or_else(|e| { this.status = format!("Failed to load layout: {e}"); layout::LayoutFile { version: 1, ..Default::default() } }); this.positions = loaded.positions; this.roles = loaded.roles; this.zoom = 1.; this.focus = false; this.graph = Some(graph); this.selected = None; this.original.clear(); this.conflict = false; this.start_watcher(window, cx); }
+                    Ok(graph) => { if !this.guard(cx) { return; } this.generation += 1; this.status = format!("{} files · {} references", graph.nodes.len(), graph.edges.len()); let loaded = layout::load(&graph.root); let loaded = loaded.unwrap_or_else(|e| { this.status = format!("Failed to load layout: {e}"); layout::LayoutFile { version: 1, ..Default::default() } }); this.positions = loaded.positions; this.roles = loaded.roles; this.zoom = 1.; this.focus = false; this.graph_revision += 1; this.graph = Some(graph); this.documents.clear(); this.selected = None; this.original.clear(); this.conflict = false; this.start_watcher(window, cx); }
                     Err(e) => this.status = e,
                 }
                 cx.notify();
             });
         }).detach();
     }
-    fn select(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected.as_deref() == Some(id.as_str()) { return; }
-        if !self.guard(cx) { return; }
-        let Some(graph) = &self.graph else { return };
-        match core::read_document(std::path::Path::new(&graph.root), &id) {
-            Ok(doc) => { self.selected = Some(id); self.original = doc.content.clone(); self.conflict = false; self.editor.update(cx, |editor, cx| { let extension = std::path::Path::new(self.selected.as_deref().unwrap_or("")).extension().and_then(|s| s.to_str()).unwrap_or("txt"); editor.set_highlighter(extension.to_string(), cx); editor.set_value(doc.content, window, cx); }); }
-            Err(e) => self.status = e,
-        }
-        cx.notify();
+    fn select(&mut self,id:String,window:&mut Window,cx:&mut Context<Self>){
+        self.select_file(id,false,window,cx);
     }
+    fn select_file(&mut self,id:String,pin:bool,window:&mut Window,cx:&mut Context<Self>){
+        if self.selected.as_deref()!=Some(id.as_str())&&!self.composition_ready(window,cx){return;}
+        if self.documents.get(&id).is_some(){
+            if pin{self.documents.pin(&id);}self.activate_tab(&id,window,cx);return;
+        }
+        let Some(graph)=&self.graph else{return;};
+        let doc=match core::read_document(std::path::Path::new(&graph.root),&id){Ok(doc)=>doc,Err(e)=>{self.status=e;cx.notify();return;}};
+        // Reuse a clean preview, but never replace an edited or saving session.
+        if let Some(preview)=self.documents.reusable_preview(|tab|self.saving||self.tab_dirty(&tab.id,cx)){
+            self.documents.remove(&preview);
+        }
+        let editor=cx.new(|cx|{
+            let mut state=EditorState::new(window,cx).line_number(self.preferences.line_numbers).soft_wrap(self.preferences.soft_wrap).replaceable(true);
+            state.set_highlighter_factory(std::rc::Rc::new(|language|Some(Box::new(highlight::Highlighter::new(language)))),cx);
+            state.set_editor_style(ui::theme::editor_style());
+            let ext=std::path::Path::new(&id).extension().and_then(|s|s.to_str()).unwrap_or("txt");
+            state.set_highlighter(ext.to_string(),cx);state.set_value(doc.content.clone(),window,cx);state
+        });
+        let token=self.documents.insert(id.clone(),editor.clone(),doc.content,pin);
+        let changed_id=id.clone();
+        cx.subscribe(&editor,move|this,editor,event,cx|{
+            if !matches!(event,InputEvent::Change){return;}
+            if let Some(tab)=this.documents.get_mut(&changed_id).filter(|tab|tab.token==token){
+                tab.update_buffer(editor.read(cx).value());cx.notify();
+            }
+        }).detach();
+        let observed_id=id.clone();let mut last_cursor=editor.read(cx).cursor_position();
+        cx.observe(&editor,move|this,editor,cx|{
+            let cursor=editor.read(cx).cursor_position();
+            if cursor!=last_cursor{last_cursor=cursor;if this.selected.as_deref()==Some(&observed_id){cx.notify();}}
+        }).detach();
+        self.activate_tab(&id,window,cx);
+    }
+
 }
 fn main() {
     let mut args=std::env::args_os().skip(1);
@@ -276,9 +384,10 @@ fn main() {
         if let Err(e)=ui::theme::load_fonts(cx){settings_warning=Some(format!("Bundled fonts could not be loaded: {e}"));}
         ui::theme::install(&preferences,cx);
         let modifier = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
-        cx.bind_keys([KeyBinding::new(&format!("{modifier}-shift-p"), TogglePalette, None), KeyBinding::new(&format!("{modifier}-s"), SaveDocument, None), KeyBinding::new("escape", CloseOverlay, None), KeyBinding::new(&format!("{modifier}-f"), FindDocument, None)]);
-        let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1440.),px(900.)), cx))), titlebar: Some(TitlebarOptions { title: Some("skill studio".into()), ..Default::default() }), ..Default::default() };
+        cx.bind_keys([KeyBinding::new(&format!("{modifier}-shift-p"), TogglePalette, None), KeyBinding::new(&format!("{modifier}-s"), SaveDocument, None), KeyBinding::new(&format!("{modifier}-w"), CloseDocument, None), KeyBinding::new(&format!("{modifier}-shift-v"), TogglePreview, None), KeyBinding::new("escape", CloseOverlay, None), KeyBinding::new(&format!("{modifier}-f"), FindDocument, None)]);
+        let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1440.),px(900.)), cx))), titlebar: None, app_owns_titlebar_drag:true, window_min_size:Some(size(px(640.),px(480.))), ..Default::default() };
         cx.open_window(options, move |window, cx| {
+            window.set_window_title("skill studio");
             let editor = cx.new(|cx| {
                 let mut state = EditorState::new(window, cx).line_number(preferences.line_numbers).soft_wrap(preferences.soft_wrap).replaceable(true);
                 state.set_highlighter_factory(std::rc::Rc::new(|language| Some(Box::new(highlight::Highlighter::new(language)))), cx);
@@ -291,17 +400,16 @@ fn main() {
             let find_query=cx.new(|cx|{let mut input=InputState::new(window,cx).placeholder("Find in document…");input.set_editor_style(ui::theme::input_style());input});
             let replace_query=cx.new(|cx|{let mut input=InputState::new(window,cx).placeholder("Replace with…");input.set_editor_style(ui::theme::input_style());input});
             let studio = cx.new(|cx| {
-                cx.observe(&find_query,|this: &mut Studio,query,cx|{if this.find_open{let query=query.read(cx).value().to_string();this.editor.update(cx,|s,cx|s.set_search_query(query,true,cx));}cx.notify();}).detach();
-                cx.observe(&command_search, |this: &mut Studio, _, cx| { this.palette_index=0; cx.notify(); }).detach();
-                cx.observe(&editor, |_, _, cx| cx.notify()).detach();
-                cx.observe(&search, |_, _, cx| cx.notify()).detach();
-                Studio { find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), drag: None, zoom: 1., drag_moved: false, palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
+                cx.subscribe(&find_query,|this: &mut Studio,query,event,cx|{if matches!(event,InputEvent::Change){if this.find_open{let query=query.read(cx).value().to_string();this.editor.update(cx,|s,cx|s.set_search_query(query,true,cx));}cx.notify();}}).detach();
+                cx.subscribe(&command_search, |this: &mut Studio, _, event,cx| { if matches!(event,InputEvent::Change){this.palette_index=0;cx.notify();} }).detach();
+                cx.subscribe(&search, |_: &mut Studio, _, event,cx| {if matches!(event,InputEvent::Change){cx.notify();}}).detach();
+                Studio { explorer:Default::default(), panes:Default::default(), flow_canvas:None, flow_mode:true, documents:Default::default(), graph_canvas: None, graph_revision: 0, saving: false, refreshing: false, refresh_pending: false, find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), zoom: 1., palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
             });
             studio.read(cx).focus_handle.clone().focus(window, cx);
             if let Some(path)=&initial_workspace {
                 studio.update(cx, |this,cx| {
                     match core::open_workspace(path) {
-                        Ok(graph)=>{let loaded=layout::load(&graph.root).unwrap_or_else(|_|layout::LayoutFile{version:1,..Default::default()});this.positions=loaded.positions;this.roles=loaded.roles;this.graph=Some(graph);this.start_watcher(window,cx);},
+                        Ok(graph)=>{let loaded=layout::load(&graph.root).unwrap_or_else(|_|layout::LayoutFile{version:1,..Default::default()});this.positions=loaded.positions;this.roles=loaded.roles;this.graph_revision+=1;this.graph=Some(graph);this.start_watcher(window,cx);},
                         Err(e)=>this.status=e,
                     }
                 });

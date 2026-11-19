@@ -27,7 +27,7 @@ pub fn visible(graph: &Graph, scope: Scope, focus: Option<&str>, query: &str, sh
     use super::*;
     use crate::core::{Node, Edge};
     fn graph() -> Graph {
-        Graph {root:String::new(), warnings:vec![], nodes:vec![node("a", "skill"),node("b", "document"),node("c", "document"),node("d", "missing")], edges:vec![edge("a","b"),edge("b","c"),edge("c","a"),edge("a","d")]}
+        Graph {root:String::new(), entries:vec![], warnings:vec![],flows:vec![], nodes:vec![node("a", "skill"),node("b", "document"),node("c", "document"),node("d", "missing")], edges:vec![edge("a","b"),edge("b","c"),edge("c","a"),edge("a","d")]}
     }
     fn node(id:&str,kind:&str)->Node {Node{id:id.into(), label:id.into(),kind:kind.into(),title:String::new(),summary:String::new(),headings:vec![]}}
     fn edge(a:&str,b:&str)->Edge {Edge{source:a.into(),target:b.into(),line:1,missing:false}}

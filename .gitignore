@@ -1,6 +1,17 @@
-# Dependencies and build outputs
-/target/
-/gpui/target/
+# Dependencies and build outputs (all workspace/package depths)
+node_modules/
+target/
+/dist/
+/src-tauri/gen/
+/gpui/package/
+/gpui/*.zip
+/gpui/*.dmg
+/gpui/*.app/
+
+# Python tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # Local environment and secrets
 .env
