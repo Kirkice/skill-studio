@@ -45,7 +45,7 @@ impl TerminalView{
                 this.starting=false;
                 match result{
                     Ok((session,events,label))=>{
-                        let session=Arc::new(session);this.session=Some(session.clone());this.label=label;this.status="Local PTY · Ctrl+C may vary by Windows program".into();
+                        let session=Arc::new(session);this.session=Some(session.clone());this.label=label;this.status=if cfg!(windows){"Local PTY · Ctrl+C depends on the running program"}else{"Local PTY · live shell session"}.into();
                         let mut g=this.grid.borrow_mut();g.parser=terminal::parser(rows,cols);g.rows.clear();g.marked.clear();g.selection=None;g.session=Some(session);drop(g);
                         this.reader=Some(cx.spawn(async move|this,cx|{
                             while let Ok(first)=events.recv().await{
@@ -83,7 +83,7 @@ impl TerminalView{
     fn send(&mut self,bytes:&[u8],cx:&mut Context<Self>){
         if self.composing(){self.grid.borrow_mut().marked.clear();}
         let mut g=self.grid.borrow_mut();g.parser.screen_mut().set_scrollback(0);g.selection=None;
-        if let Some(s)=&self.session{if let Err(e)=s.write(bytes){self.status=e;}}drop(g);cx.notify();
+        if let Some(s)=&self.session{if let Err(e)=s.write(bytes){self.status=e;}}else{self.status="Terminal is not ready; wait for the prompt or restart".into();}drop(g);cx.notify();
     }
     fn copy(&mut self,window:&mut Window,cx:&mut Context<Self>){let text=self.grid.borrow().copy();if !text.is_empty(){cx.write_to_clipboard(ClipboardItem::new_string(text));}self.focus.focus(window,cx);}
     fn paste_text(&mut self,text:String,window:&mut Window,cx:&mut Context<Self>){
@@ -94,7 +94,7 @@ impl TerminalView{
             cx.spawn_in(window,async move|this,cx|{if answer.await.ok()!=Some(0){return;}let _=this.update_in(cx,|this,w,cx|{if this.generation==generation{let bytes=terminal::paste_bytes(&text,this.grid.borrow().parser.screen().bracketed_paste());this.send(&bytes,cx);this.focus.focus(w,cx);}});}).detach();
         }else{let bytes=terminal::paste_bytes(&text,self.grid.borrow().parser.screen().bracketed_paste());self.send(&bytes,cx);self.focus.focus(window,cx);}
     }
-    fn paste(&mut self,window:&mut Window,cx:&mut Context<Self>){if let Some(text)=cx.read_from_clipboard().and_then(|i|i.text()){self.paste_text(text,window,cx);}}
+    fn paste(&mut self,window:&mut Window,cx:&mut Context<Self>){if self.starting||!self.active(){return;}if let Some(text)=cx.read_from_clipboard().and_then(|i|i.text()){self.paste_text(text,window,cx);}}
     fn key_down(&mut self,event:&KeyDownEvent,window:&mut Window,cx:&mut Context<Self>){
         if self.composing(){return;}
         let application=self.grid.borrow().parser.screen().application_cursor();
@@ -165,7 +165,7 @@ impl Render for TerminalView{
             if focused{window.handle_input(&focus,ElementInputHandler::new(bounds,input),cx);}
             let owner=owner.clone();window.on_mouse_event(move|event:&MouseUpEvent,phase,_,cx|{if phase==DispatchPhase::Capture&&event.button==MouseButton::Left{let _=owner.update(cx,|this,cx|{let mut g=this.grid.borrow_mut();if g.selecting{g.selecting=false;drop(g);cx.notify();}});}});
         }).size_full();
-        let cwd=self.cwd.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default();let active=self.active();
+        let cwd=self.cwd.as_ref().map(|p|crate::terminal::shell_cwd(p).to_string_lossy().into_owned()).unwrap_or_default();let active=self.active();
         div().size_full().min_h(px(0.)).flex().flex_col().bg(rgb(BG)).track_focus(&self.focus).key_context("Terminal")
             .on_action(cx.listener(|this,_:&CopyTerminal,w,cx|{cx.stop_propagation();this.copy(w,cx);}))
             .on_action(cx.listener(|this,_:&PasteTerminal,w,cx|{cx.stop_propagation();this.paste(w,cx);}))
@@ -179,9 +179,9 @@ impl Render for TerminalView{
             .on_key_down(cx.listener(|this,e,w,cx|this.key_down(e,w,cx)))
             .child(div().h(px(34.)).flex_none().px(px(10.)).flex().items_center().gap(px(6.)).bg(rgb(PANEL)).border_b_1().border_color(rgb(BORDER))
                 .child(icon(Icon::Terminal).size(px(14.)).text_color(rgb(ACCENT))).child(caption("TERMINAL"))
-                .child(div().flex_1().min_w(px(0.)).truncate().text_size(px(10.)).text_color(rgb(DIM)).child(format!("{} · {cwd}",self.label)))
+                .child(div().flex_1().min_w(px(0.)).truncate().text_size(px(10.)).text_color(rgb(DIM)).child(format!("{} · start: {cwd}",self.label)))
                 .child(icon_button("terminal-copy",Icon::Copy,"复制选中文本；未选择时复制当前屏幕",false,true).w(px(23.)).h(px(23.)).on_click(cx.listener(|this,_,w,cx|this.copy(w,cx))))
-                .child(icon_button("terminal-paste",Icon::Paste,"粘贴 · 多行会先确认",false,active).w(px(23.)).h(px(23.)).on_click(cx.listener(|this,_,w,cx|this.paste(w,cx))))
+                .child(icon_button("terminal-paste",Icon::Paste,"粘贴 · 多行会先确认",false,active&&!self.starting).w(px(23.)).h(px(23.)).on_click(cx.listener(|this,_,w,cx|this.paste(w,cx))))
                 .child(icon_button("terminal-restart",if active{Icon::Refresh}else{Icon::Plus},"启动/重新启动终端",false,!self.starting).w(px(23.)).h(px(23.)).on_click(cx.listener(|this,_,w,cx|{if !this.starting{this.ask_stop(true,w,cx);}})))
                 .child(icon_button("terminal-stop",Icon::Stop,"停止终端及运行中的命令（需确认）",false,active).w(px(23.)).h(px(23.)).on_click(cx.listener(|this,_,w,cx|this.ask_stop(false,w,cx))))
                 .child(icon_button("terminal-hide",Icon::ChevronDown,"收起终端，进程继续运行",false,true).w(px(23.)).h(px(23.)).on_click(cx.listener(|this,_,_,cx|{if this.composing(){this.status="Finish IME input before hiding the terminal".into();cx.notify();}else{cx.emit(TerminalEvent::Hide);}}))))
@@ -193,6 +193,7 @@ impl Render for TerminalView{
     }
 }
 impl EntityInputHandler for TerminalView{
+    fn accepts_text_input(&self,_:&mut Window,_:&mut Context<Self>)->bool{self.session.as_ref().is_some_and(|s|s.running())&&!self.starting}
     fn text_for_range(&mut self,range:Range<usize>,adjusted:&mut Option<Range<usize>>,_:&mut Window,_:&mut Context<Self>)->Option<String>{let g=self.grid.borrow();let text=g.marked.encode_utf16().collect::<Vec<_>>();let start=range.start.min(text.len());let end=range.end.min(text.len()).max(start);*adjusted=Some(start..end);Some(String::from_utf16_lossy(&text[start..end]))}
     fn selected_text_range(&mut self,_:bool,_:&mut Window,_:&mut Context<Self>)->Option<UTF16Selection>{let n=self.grid.borrow().marked.encode_utf16().count();Some(UTF16Selection{range:n..n,reversed:false})}
     fn marked_text_range(&self,_:&mut Window,_:&mut Context<Self>)->Option<Range<usize>>{let n=self.grid.borrow().marked.encode_utf16().count();(n>0).then_some(0..n)}

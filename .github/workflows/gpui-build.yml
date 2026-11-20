@@ -31,6 +31,7 @@ jobs:
           Copy-Item ../THIRD-PARTY-NOTICES.md package/
           New-Item -ItemType Directory -Force package/licenses | Out-Null
           Copy-Item assets/fonts/OFL*.txt package/licenses/
+          Copy-Item assets/licenses/* package/licenses/
           Compress-Archive -Path package/* -DestinationPath skill-studio-gpui-windows.zip
       - name: Package macOS application
         if: runner.os == 'macOS'
@@ -42,6 +43,7 @@ jobs:
           cp assets/icon.icns 'package/skill studio.app/Contents/Resources/icon.icns'
           mkdir -p 'package/skill studio.app/Contents/Resources/licenses'
           cp assets/fonts/OFL*.txt 'package/skill studio.app/Contents/Resources/licenses/'
+          cp assets/licenses/* 'package/skill studio.app/Contents/Resources/licenses/'
           cp ../THIRD-PARTY-NOTICES.md 'package/skill studio.app/Contents/Resources/'
           ditto -c -k --keepParent 'package/skill studio.app' skill-studio-gpui-macos.zip
       - uses: actions/upload-artifact@v4

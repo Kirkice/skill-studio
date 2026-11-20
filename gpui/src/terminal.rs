@@ -62,7 +62,7 @@ impl Session{
 }
 impl Drop for Session{fn drop(&mut self){self.stop();}}
 fn pty_size(rows:u16,cols:u16)->PtySize{PtySize{rows:rows.clamp(1,200),cols:cols.clamp(2,500),pixel_width:0,pixel_height:0}}
-fn shell_cwd(path:&Path)->PathBuf{
+pub(crate) fn shell_cwd(path:&Path)->PathBuf{
     #[cfg(windows)]{PathBuf::from(crate::files::shell_display_path(path))}
     #[cfg(not(windows))]{path.to_path_buf()}
 }
