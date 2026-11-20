@@ -80,8 +80,44 @@ fn shell()->Result<(CommandBuilder,String),String>{
     }
 }
 
-#[derive(Default)]pub struct Replies{pub bytes:Vec<u8>}
+pub struct Replies{pub bytes:Vec<u8>,pub foreground:u32,pub background:u32,pub ansi:[u32;16]}
+impl Default for Replies{fn default()->Self{Self{bytes:vec![],foreground:0xd2d4d9,background:0x17191d,ansi:[0;16]}}}
+pub fn indexed_color(index:u8,ansi:&[u32;16])->u32{
+    if index<16{ansi[index as usize]}else if index>=232{let v=8+(u32::from(index)-232)*10;(v<<16)|(v<<8)|v}else{let n=u32::from(index)-16;let a=[0,95,135,175,215,255];(a[(n/36)as usize]<<16)|(a[((n/6)%6)as usize]<<8)|a[(n%6)as usize]}
+}
+#[derive(Default)]pub struct ScrollAccumulator{x:f32,y:f32}
+impl ScrollAccumulator{
+    pub fn reset(&mut self){self.x=0.;self.y=0.;}
+    pub fn steps(&mut self,x:f32,y:f32,limit:f32)->(i32,i32){
+        fn step(remainder:&mut f32,delta:f32,limit:f32)->i32{if !delta.is_finite(){return 0;}*remainder=(*remainder+delta).clamp(-limit.max(1.),limit.max(1.));let n=remainder.trunc() as i32;*remainder-=n as f32;n}
+        (step(&mut self.x,x,limit),step(&mut self.y,y,limit))
+    }
+}
+pub fn wheel_report(encoding:vt100::MouseProtocolEncoding,button:u8,x:u16,y:u16,modifiers:u8)->Vec<u8>{
+    let code=button|modifiers;
+    match encoding{
+        vt100::MouseProtocolEncoding::Sgr=>format!("\x1b[<{code};{x};{y}M").into_bytes(),
+        vt100::MouseProtocolEncoding::Default=>if x<=223&&y<=223{vec![27,91,77,code+32,(x+32) as u8,(y+32) as u8]}else{vec![]},
+        vt100::MouseProtocolEncoding::Utf8=>{let mut s=String::from("\x1b[M");for n in [u32::from(code)+32,u32::from(x)+32,u32::from(y)+32]{if let Some(c)=char::from_u32(n){s.push(c);}}s.into_bytes()},
+    }
+}
+#[derive(Debug,PartialEq,Eq)]pub enum WheelAction{History(usize),Input(Vec<u8>)}
+pub fn route_wheel(screen:&vt100::Screen,steps:(i32,i32),position:(u16,u16),modifiers:u8,force_history:bool)->WheelAction{
+    let(dx,dy)=(steps.0.clamp(-500,500),steps.1.clamp(-200,200));
+    if screen.mouse_protocol_mode()!=vt100::MouseProtocolMode::None&&!force_history{
+        let mut bytes=vec![];for(steps,positive,negative)in[(dy,64,65),(dx,66,67)]{for _ in 0..steps.unsigned_abs(){bytes.extend(wheel_report(screen.mouse_protocol_encoding(),if steps>0{positive}else{negative},position.0,position.1,modifiers));}}WheelAction::Input(bytes)
+    }else if screen.alternate_screen()&&!force_history{
+        let up=if screen.application_cursor(){b"\x1bOA"}else{b"\x1b[A"};let down=if screen.application_cursor(){b"\x1bOB"}else{b"\x1b[B"};let mut bytes=vec![];for _ in 0..dy.unsigned_abs(){bytes.extend_from_slice(if dy>0{up}else{down});}WheelAction::Input(bytes)
+    }else{WheelAction::History((screen.scrollback() as i64+i64::from(dy)).max(0) as usize)}
+}
+
 impl vt100::Callbacks for Replies{
+    fn unhandled_osc(&mut self,_:&mut vt100::Screen,params:&[&[u8]]){
+        fn reply(out:&mut Vec<u8>,key:&str,rgb:u32){if out.len()>8192{return;}out.extend_from_slice(format!("\x1b]{key};rgb:{:04x}/{:04x}/{:04x}\x1b\\",((rgb>>16)&255)*257,((rgb>>8)&255)*257,(rgb&255)*257).as_bytes());}
+        let Some(command)=params.first().and_then(|p|std::str::from_utf8(p).ok()).and_then(|s|s.parse::<u16>().ok())else{return;};
+        if command==4{for pair in params[1..].chunks_exact(2){if pair[1]!=b"?"{continue;}if let Some(index)=std::str::from_utf8(pair[0]).ok().and_then(|s|s.parse::<u8>().ok()){reply(&mut self.bytes,&format!("4;{index}"),indexed_color(index,&self.ansi));}}}
+        else if (10..=12).contains(&command){for (i,q) in params[1..].iter().enumerate(){let key=command+i as u16;if *q==b"?"&&key<=12{let rgb=if key==11{self.background}else{self.foreground};reply(&mut self.bytes,&key.to_string(),rgb);}}}
+    }
     fn unhandled_csi(&mut self,screen:&mut vt100::Screen,first:Option<u8>,_:Option<u8>,params:&[&[u16]],c:char){
         if self.bytes.len()>8192{return;}
         let p=params.first().and_then(|p|p.first()).copied().unwrap_or(0);
@@ -95,6 +131,12 @@ pub fn paste_bytes(text:&str,bracketed:bool)->Vec<u8>{let text=text.replace("\r\
     use super::*;
     #[test]fn vt_preserves_colors_unicode_and_alternate_screen(){let mut p=parser(10,40);p.process("\x1b[31m中文\x1b[0m".as_bytes());assert!(p.screen().contents().contains("中文"));assert_eq!(p.screen().cell(0,0).unwrap().fgcolor(),vt100::Color::Idx(1));p.process(b"\x1b[?1049h");assert!(p.screen().alternate_screen());}
     #[test]fn query_responses_are_split_safe(){let mut p=parser(10,40);p.process(b"\x1b[2;3H\x1b[");p.process(b"6n");assert_eq!(p.callbacks().bytes,b"\x1b[2;3R");}
+    #[test]fn precise_scroll_accumulates_instead_of_dropping_small_deltas(){let mut s=ScrollAccumulator::default();for _ in 0..3{assert_eq!(s.steps(0.,0.25,20.),(0,0));}assert_eq!(s.steps(0.,0.25,20.),(0,1));assert_eq!(s.steps(0.,-1.,20.),(0,-1));}
+    #[test]fn full_screen_mouse_wheel_reaches_application(){let mut p=parser(10,40);p.process(b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");assert_eq!(route_wheel(p.screen(),(0,1),(4,3),0,false),WheelAction::Input(b"\x1b[<64;4;3M".to_vec()));assert!(matches!(route_wheel(p.screen(),(0,1),(4,3),4,true),WheelAction::History(_)));}
+    #[test]fn alternate_screen_without_mouse_uses_cursor_keys(){let mut p=parser(10,40);p.process(b"\x1b[?1049h\x1b[?1h");assert_eq!(route_wheel(p.screen(),(0,-1),(1,1),0,false),WheelAction::Input(b"\x1bOB".to_vec()));}
+    #[test]fn normal_screen_scrolls_real_history(){let mut p=parser(3,20);p.process(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");if let WheelAction::History(n)=route_wheel(p.screen(),(0,2),(1,1),0,false){p.screen_mut().set_scrollback(n);}else{panic!("history expected");}assert_eq!(p.screen().scrollback(),2);assert!(p.screen().contents().contains("one"));}
+    #[test]fn color_queries_return_exact_terminal_colors(){let mut p=parser(3,20);p.callbacks_mut().ansi[1]=0xdc8c95;p.process(b"\x1b]11;?\x07\x1b]10;?\x07\x1b]4;1;?\x07");let text=String::from_utf8(p.callbacks().bytes.clone()).unwrap();assert!(text.contains("11;rgb:1717/1919/1d1d"));assert!(text.contains("10;rgb:d2d2/d4d4/d9d9"));assert!(text.contains("4;1;rgb:dcdc/8c8c/9595"));}
+    #[test]fn legacy_and_utf8_wheel_encodings_preserve_coordinates(){assert_eq!(wheel_report(vt100::MouseProtocolEncoding::Default,65,1,2,0),vec![27,91,77,97,33,34]);assert!(wheel_report(vt100::MouseProtocolEncoding::Default,64,300,1,0).is_empty());assert!(String::from_utf8(wheel_report(vt100::MouseProtocolEncoding::Utf8,64,300,1,0)).is_ok());}
     #[test]fn dock_height_keeps_room_for_document(){assert_eq!(dock_height(800.,830.),650.);assert_eq!(dock_height(20.,830.),120.);}
     #[test]fn paste_respects_bracketed_mode(){assert_eq!(paste_bytes("a\r\nb",false),b"a\rb");assert_eq!(paste_bytes("a\nb",true),b"\x1b[200~a\nb\x1b[201~");}
     #[test]fn pty_runs_private_command_and_exits(){
