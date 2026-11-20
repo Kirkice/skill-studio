@@ -7,7 +7,8 @@ mod preview;
 mod chrome;
 mod explorer;
 mod file_preview;
-use crate::{commands::Command, filter, role, Studio, TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview};
+pub(crate) mod terminal;
+use crate::{commands::Command, filter, role, Studio, TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview, ToggleTerminal};
 use controls::*;
 use icons::{icon,Icon,file_icon,command_icon};
 use theme::*;
@@ -51,6 +52,7 @@ impl Studio {
             .children(text.then(||icon_button("editor-find",Icon::Search,"Find in document · Ctrl/Cmd+F",self.find_open,true).on_click(cx.listener(|this,_,w,cx|this.open_find(w,cx)))))
             .children((text&&!preview).then(||icon_button("editor-wrap",Icon::Wrap,"Toggle word wrap",self.preferences.soft_wrap,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
             .children((text&&!preview).then(||icon_button("editor-numbers",Icon::Numbers,"Toggle line numbers",self.preferences.line_numbers,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
+            .child(icon_button("document-terminal",Icon::Terminal,"显示/收起本地终端 · Ctrl+`",self.terminal_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
             .child(icon_button("document-menu",Icon::More,"Document actions",false,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.document_menu=!this.document_menu;cx.notify();}}))));
         if let Some(id)=&self.selected {
             panel=panel.child(div().px(px(14.)).py(px(8.)).text_size(px(11.5)).text_color(rgb(DIM)).truncate().child(id.clone()));
@@ -153,6 +155,15 @@ impl Render for Studio {
         let sidebar=self.sidebar(cx);
         let graph=self.graph_view(&visible,cx);
         let editor=self.document_panel(cx);
+        let available=(f32::from(window.viewport_size().height)-70.).max(300.);
+        self.terminal_height=crate::terminal::dock_height(self.terminal_height,available);
+        let mut document=div().relative().size_full().flex().flex_col().overflow_hidden().child(div().flex_1().min_h(px(0.)).child(editor));
+        if self.terminal_visible{
+            document=document.child(div().id("terminal-divider").h(px(6.)).w_full().flex_none().cursor_row_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))
+                .on_mouse_down(MouseButton::Left,cx.listener(|this,e:&MouseDownEvent,w,cx|{this.terminal_drag=Some(crate::terminal::DockDrag{origin:f32::from(e.position.y),height:this.terminal_height,draft:this.terminal_height});this.focus_handle.focus(w,cx);cx.stop_propagation();cx.notify();})))
+                .child(div().h(px(self.terminal_height)).w_full().flex_none().child(self.terminal.clone()))
+                .children(self.terminal_drag.as_ref().map(|d|div().absolute().bottom(px(d.draft+2.)).left(px(0.)).right(px(0.)).h(px(2.)).bg(rgb(ACCENT))));
+        }
         let overlay=self.overlays(window,cx);
         let explorer_menu=self.explorer_context_menu(window,cx);
         let root=self.graph.as_ref().map(|g|g.root.clone()).unwrap_or_else(||"No workspace open".into());
@@ -169,7 +180,8 @@ impl Render for Studio {
             .on_action(cx.listener(|this,_:&SaveDocument,w,cx|this.save(w,cx)))
             .on_action(cx.listener(|this,_:&CloseDocument,w,cx|{if let Some(id)=this.selected.clone(){this.close_tab(id,w,cx);}}))
             .on_action(cx.listener(|this,_:&TogglePreview,w,cx|this.toggle_preview(w,cx)))
-            .on_action(cx.listener(|this,_:&CloseOverlay,w,cx|{if this.panes.cancel(){cx.notify();}else{this.close_overlay(w,cx);}}))
+            .on_action(cx.listener(|this,_:&ToggleTerminal,w,cx|this.toggle_terminal(w,cx)))
+            .on_action(cx.listener(|this,_:&CloseOverlay,w,cx|{if this.terminal_drag.take().is_some()||this.panes.cancel(){cx.notify();}else{this.close_overlay(w,cx);}}))
             .child(resize_events)
             .child(titlebar)
             .child(div().relative().flex_1().min_h(px(0.)).flex().overflow_hidden()
@@ -177,12 +189,12 @@ impl Render for Studio {
                 .child(self.pane_handle(crate::panes::Divider::Workspace,"workspace-divider",cx))
                 .child(div().flex_1().min_w(px(150.)).h_full().child(graph))
                 .child(self.pane_handle(crate::panes::Divider::Editor,"editor-divider",cx))
-                .child(div().w(px(self.panes.editor)).h_full().flex_none().child(editor))
+                .child(div().w(px(self.panes.editor)).h_full().flex_none().child(document))
                 .children(guide.map(|x|div().absolute().left(px(x-1.)).top(px(0.)).bottom(px(0.)).w(px(2.)).bg(rgb(ACCENT)))))
             .child(div().h(px(26.)).flex_none().px(px(12.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().gap(px(8.)).bg(rgb(PANEL))
                 .child(div().w(px(5.)).h(px(5.)).rounded_full().bg(rgb(if self.conflict{WARNING}else{GREEN})))
                 .child(div().flex_1().truncate().text_size(px(11.5)).text_color(rgb(MUTED)).child(status))
-                .child(caption(if self.watcher.is_some(){"Live index · Local first"}else{"Local first · Scripts never run"})))
+                .child(caption(if self.watcher.is_some(){"Live index · Local first"}else{"Local first · Explicit terminal"})))
             .children(self.dragging_external.then(||div().id("external-drop-target").absolute().inset_0().occlude()
                 .on_drop(cx.listener(|this,paths:&ExternalPaths,w,cx|{cx.stop_propagation();this.open_external(paths.paths().to_vec(),w,cx);}))
                 .bg(rgba(0x101a2ba8)).flex().items_center().justify_center()

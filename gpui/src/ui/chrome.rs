@@ -10,6 +10,9 @@ pub(super) fn resize_events(owner:WeakEntity<Studio>)->impl IntoElement{
         window.on_mouse_event(move|event:&MouseMoveEvent,phase,window,cx|{
             if phase!=DispatchPhase::Capture{return;}
             let handled=moved.update(cx,|this,cx|{
+                if let Some(drag)=&mut this.terminal_drag{
+                    drag.draft=crate::terminal::dock_height(drag.height-(f32::from(event.position.y)-drag.origin),f32::from(window.viewport_size().height)-70.);cx.notify();return true;
+                }
                 if !this.panes.dragging(){return false;}
                 if this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width)){cx.notify();}true
             }).unwrap_or(false);
@@ -19,6 +22,7 @@ pub(super) fn resize_events(owner:WeakEntity<Studio>)->impl IntoElement{
         window.on_mouse_event(move|event:&MouseUpEvent,phase,window,cx|{
             if phase!=DispatchPhase::Capture||event.button!=MouseButton::Left{return;}
             let handled=released.update(cx,|this,cx|{
+                if let Some(drag)=this.terminal_drag.take(){this.terminal_height=drag.draft;cx.notify();return true;}
                 if !this.panes.dragging(){return false;}
                 this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width));
                 this.panes.commit();cx.notify();true
@@ -60,7 +64,7 @@ impl Studio {
             .child(icon_button("window-minimize",Icon::Minus,"Minimize window",false,true).w(px(38.)).h_full().rounded(px(0.)).on_click(|_,w,_|w.minimize_window()))
             .child(icon_button("window-maximize",if window.is_maximized(){Icon::Restore}else{Icon::Maximize},if window.is_maximized(){"Restore window"}else{"Maximize window"},false,true).w(px(38.)).h_full().rounded(px(0.)).on_click(|_,w,_|toggle_maximize(w)))
             .child(icon_button("window-close",Icon::Close,"Close window · unsaved tabs are protected",false,true).w(px(42.)).h_full().rounded(px(0.)).hover(|s|s.bg(rgb(0xc7444e)))
-                .on_click(cx.listener(|this,_,w,cx|{if this.guard(cx){w.remove_window();}})))
+                .on_click(cx.listener(|this,_,w,cx|{if this.request_close(w,cx){w.remove_window();}})))
     }
     pub(super) fn pane_handle(&self,divider:Divider,id:&'static str,cx:&mut Context<Self>)->Stateful<Div>{
         div().id(id).w(px(crate::panes::Panes::HANDLE)).h_full().flex_none().cursor_col_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))

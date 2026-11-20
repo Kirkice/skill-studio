@@ -66,7 +66,7 @@ pub fn resolve_drop(paths:&[PathBuf],current_root:Option<&str>)->Result<DropTarg
 }
 pub fn size(bytes:u64)->String{if bytes>=1_000_000{format!("{:.1} MB",bytes as f64/1_000_000.)}else if bytes>=1000{format!("{:.1} KB",bytes as f64/1000.)}else{format!("{bytes} B")}}
 #[cfg(target_os="windows")]
-fn shell_display_path(path:&Path)->String{
+pub(crate) fn shell_display_path(path:&Path)->String{
     let display=path.to_string_lossy();
     if let Some(unc)=display.strip_prefix(r"\\?\UNC\"){format!(r"\\{unc}")}else{display.strip_prefix(r"\\?\").unwrap_or(&display).to_string()}
 }
