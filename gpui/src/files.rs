@@ -65,12 +65,51 @@ pub fn resolve_drop(paths:&[PathBuf],current_root:Option<&str>)->Result<DropTarg
     Ok(DropTarget::File{path,relative})
 }
 pub fn size(bytes:u64)->String{if bytes>=1_000_000{format!("{:.1} MB",bytes as f64/1_000_000.)}else if bytes>=1000{format!("{:.1} KB",bytes as f64/1000.)}else{format!("{bytes} B")}}
+#[cfg(target_os="windows")]
+fn shell_display_path(path:&Path)->String{
+    let display=path.to_string_lossy();
+    if let Some(unc)=display.strip_prefix(r"\\?\UNC\"){format!(r"\\{unc}")}else{display.strip_prefix(r"\\?\").unwrap_or(&display).to_string()}
+}
+
+// A dedicated COM-initialized thread avoids relying on executor-thread COM state.
+// cidl=0 makes the shell open the parent and select the supplied absolute item.
+#[cfg(target_os="windows")]
+pub fn reveal_windows(path:PathBuf)->Result<(),String>{
+    std::thread::spawn(move||{
+        use std::ffi::c_void;
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name="ole32")] unsafe extern "system"{fn CoInitializeEx(reserved:*mut c_void,mode:u32)->i32;fn CoUninitialize();fn CoTaskMemFree(memory:*mut c_void);}
+        #[link(name="shell32")] unsafe extern "system"{
+            fn SHParseDisplayName(name:*const u16,context:*mut c_void,item:*mut *mut c_void,attributes:u32,result:*mut u32)->i32;
+            fn SHOpenFolderAndSelectItems(item:*const c_void,count:u32,children:*const *const c_void,flags:u32)->i32;
+        }
+        let display=shell_display_path(&path);
+        let wide=std::ffi::OsStr::new(&display).encode_wide().chain(Some(0)).collect::<Vec<_>>();
+        // All pointers refer to owned buffers or shell-allocated PIDLs; both are released on this thread.
+        unsafe{
+            let initialized=CoInitializeEx(std::ptr::null_mut(),2);
+            if initialized<0{return Err(format!("COM 0x{:08X}",initialized as u32));}
+            let mut item=std::ptr::null_mut();
+            let parsed=SHParseDisplayName(wide.as_ptr(),std::ptr::null_mut(),&mut item,0,std::ptr::null_mut());
+            let result=if parsed<0{parsed}else if item.is_null(){-2147467259}else{SHOpenFolderAndSelectItems(item,0,std::ptr::null(),0)};
+            if !item.is_null(){CoTaskMemFree(item);}CoUninitialize();
+            if result<0{Err(format!("Shell 0x{:08X}",result as u32))}else{Ok(())}
+        }
+    }).join().map_err(|_|"Shell thread failed".to_string())?
+}
+
 #[cfg(test)]mod tests{
     use super::*;
     fn open(name:&str,bytes:&[u8])->Loaded{let dir=tempfile::tempdir().unwrap();fs::write(dir.path().join(name),bytes).unwrap();load(dir.path(),name).unwrap()}
     #[test]fn utf8_text_and_script_are_editable_without_encoding_conversion(){for name in ["a.md","a.json","a.py","a.svg","a.unknown"]{let file=open(name,"\u{feff}中文\r\nhello".as_bytes());assert!(file.view.is_text());assert_eq!(file.content,"\u{feff}中文\r\nhello");}}
     #[test]fn binary_and_non_utf8_are_never_text_even_with_md_extension(){for bytes in [vec![0,1,2],vec![0xff,0xfe,65,0],vec![0xff,0x88]]{assert!(!open("bad.md",&bytes).view.is_text());}assert!(!open("a.exe",b"hello").view.is_text());assert!(!open("a.pdf",b"%PDF-1.4").view.is_text());assert!(!open("renamed.md",b"%PDF-1.4").view.is_text());}
     #[test]fn images_use_bounded_first_frame_and_bgra(){let mut bytes=Cursor::new(Vec::new());image::RgbaImage::from_pixel(2,2,image::Rgba([250,10,20,255])).write_to(&mut bytes,image::ImageFormat::Png).unwrap();assert!(matches!(open("photo.png",bytes.get_ref()).view,View::Image{width:2,height:2,..}));}
+    #[cfg(target_os="windows")]
+    #[test]fn shell_paths_preserve_drive_and_unc_locations(){
+        assert_eq!(shell_display_path(Path::new(r"\\?\C:\a b\中文.md")),r"C:\a b\中文.md");
+        assert_eq!(shell_display_path(Path::new(r"\\?\UNC\server\share\a.md")),r"\\server\share\a.md");
+        assert_eq!(shell_display_path(Path::new(r"C:\plain.md")),r"C:\plain.md");
+    }
     #[test]fn large_text_is_info_only(){let dir=tempfile::tempdir().unwrap();let path=dir.path().join("large.txt");fs::File::create(&path).unwrap().set_len(TEXT_LIMIT+1).unwrap();assert!(!load(dir.path(),"large.txt").unwrap().view.is_text());}
     #[test]fn drop_routes_existing_files_and_folders_and_rejects_multiple(){let dir=tempfile::tempdir().unwrap();let root=dir.path().canonicalize().unwrap();let file=root.join("中文.md");fs::write(&file,"# A").unwrap();assert!(matches!(resolve_drop(&[file.clone()],root.to_str()).unwrap(),DropTarget::File{relative:Some(_),..}));assert!(matches!(resolve_drop(&[root.clone()],None).unwrap(),DropTarget::Folder(_)));assert!(resolve_drop(&[file,root],None).is_err());}
 }

@@ -30,6 +30,6 @@ impl Studio{
         let path=self.graph.as_ref().map(|g|std::path::Path::new(&g.root).join(id));
         body.child(div().h(px(38.)).px(px(14.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between()
             .child(caption("FILE PREVIEW"))
-            .child(icon_button("reveal-local-file",Icon::FolderOpen,"在文件夹中显示，不执行文件",false,path.is_some()).on_click(cx.listener(move|_,_,_,cx|{if let Some(path)=&path{cx.reveal_path(path);}}))))
+            .child(icon_button("reveal-local-file",Icon::FolderOpen,"在文件夹中显示，不执行文件",false,path.is_some()).on_click(cx.listener(move|this,_,w,cx|{if let Some(path)=&path{this.reveal_in_file_manager(path.clone(),w,cx);}}))))
     }
 }

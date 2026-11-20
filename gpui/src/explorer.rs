@@ -2,6 +2,8 @@
 use crate::core::Graph;
 use std::collections::{BTreeMap,HashSet};
 
+pub struct ContextMenu { pub root:String, pub path:String, pub x:f32, pub y:f32 }
+
 #[derive(Debug)]
 pub struct Entry {
     pub path:String, pub name:String, pub title:String, pub kind:String,

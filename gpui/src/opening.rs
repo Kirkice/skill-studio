@@ -5,7 +5,7 @@ use gpui_base::input::{EditorState,InputEvent};
 use std::{path::PathBuf,rc::Rc};
 impl Studio{
     pub(crate) fn open_external(&mut self,paths:Vec<PathBuf>,window:&mut Window,cx:&mut Context<Self>){
-        self.dragging_external=false;
+        self.dragging_external=false;self.explorer_menu=None;
         if !self.composition_ready(window,cx){return;}
         self.open_ticket+=1;let ticket=self.open_ticket;
         let root=self.graph.as_ref().map(|g|g.root.clone());

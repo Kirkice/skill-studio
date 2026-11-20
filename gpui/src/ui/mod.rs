@@ -154,6 +154,7 @@ impl Render for Studio {
         let graph=self.graph_view(&visible,cx);
         let editor=self.document_panel(cx);
         let overlay=self.overlays(window,cx);
+        let explorer_menu=self.explorer_context_menu(window,cx);
         let root=self.graph.as_ref().map(|g|g.root.clone()).unwrap_or_else(||"No workspace open".into());
         let status=if self.panes.dragging(){"Resize preview · release to apply · Esc to cancel".into()}else{self.status.clone()};
         let titlebar=self.titlebar(root,window,cx);
@@ -191,5 +192,6 @@ impl Render for Studio {
                     .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child("文件夹打开工作区 · 文件按内容类型打开"))
                     .child(div().text_size(px(11.)).text_color(rgb(GREEN)).child("只打开 · 不复制 · 不自动执行")))))
             .children(overlay)
+            .children(explorer_menu)
     }
 }
