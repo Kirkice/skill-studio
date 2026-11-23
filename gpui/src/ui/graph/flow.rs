@@ -43,17 +43,23 @@ struct Location{source:String,camera:Point<Pixels>,zoom:f32,selected:Option<Stri
 fn has_flow(flows:&[Flow],source:Option<&str>)->bool{source.is_some_and(|source|flows.iter().any(|f|f.source==source))}
 fn restore(history:&mut Vec<Location>,index:usize)->Option<Location>{let location=history.get(index)?.clone();history.truncate(index);Some(location)}
 pub(crate) struct FlowCanvas{
- owner:WeakEntity<Studio>,graph:Option<Graph>,revision:u64,root:Option<String>,history:Vec<Location>,diagram:Diagram,selected:Option<String>,
+ owner:WeakEntity<Studio>,graph:Option<Graph>,revision:u64,root:Option<String>,history:Vec<Location>,diagram:Diagram,selected:Option<String>,trace:HashMap<String,crate::ui::pi_trace::State>,
  camera:Point<Pixels>,zoom:f32,pan:Option<(Point<Pixels>,Point<Pixels>)>,bounds:Rc<Cell<Bounds<Pixels>>>,center_pending:bool,
 }
 impl FlowCanvas{
- pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,camera:Point::default(),zoom:0.65,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),center_pending:true}}
+ pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,trace:HashMap::new(),camera:Point::default(),zoom:0.65,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),center_pending:true}}
  pub(super) fn sync(&mut self,revision:u64,graph:&Graph,cx:&mut Context<Self>){
   if self.revision==revision{return;}let workspace_changed=self.graph.as_ref().is_none_or(|old|old.root!=graph.root);
   self.graph=Some(graph.clone());self.revision=revision;
   if workspace_changed{self.root=None;self.selected=None;self.history.clear();self.center_pending=true;}
   if !has_flow(&graph.flows,self.root.as_deref()){self.root=graph.flows.iter().find(|f|f.entry).map(|f|f.source.clone());self.history.clear();self.center_pending=true;}
   self.rebuild();cx.notify();
+ }
+ pub(super) fn set_trace(&mut self,trace:HashMap<String,crate::ui::pi_trace::State>,cx:&mut Context<Self>){if self.trace!=trace{self.trace=trace;cx.notify();}}
+ fn trace_state(&self,card:&Card)->Option<crate::ui::pi_trace::State>{
+  if card.kind=="stage" {return None;}
+  if card.kind=="call"&&self.diagram.cards.iter().filter(|c|c.kind=="call"&&c.source==card.source).count()!=1{return None;}
+  self.trace.get(&card.source).copied()
  }
  fn rebuild(&mut self){self.diagram=self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|Some(&f.source)==self.root.as_ref()).map(|root|Diagram::build(&g.flows,root))).unwrap_or_default();if self.selected.as_ref().is_some_and(|id|!self.diagram.cards.iter().any(|n|&n.id==id)){self.selected=None;}}
  fn source(&self,path:String,line:usize,window:&mut Window,cx:&mut Context<Self>)->bool{
@@ -82,11 +88,19 @@ impl FlowCanvas{
  }
 }
 impl Render for FlowCanvas{
- fn render(&mut self,_:&mut Window,cx:&mut Context<Self>)->impl IntoElement{
+ fn render(&mut self,window:&mut Window,cx:&mut Context<Self>)->impl IntoElement{
   let extent=self.bounds.get().size;
   if self.center_pending&&extent.width>px(0.){self.camera=point(extent.width*0.5-px(760.*self.zoom),px(22.));self.center_pending=false;}
   let z=self.zoom;let camera=self.camera;let bounds_cell=self.bounds.clone();let entity_id=cx.entity().entity_id();
-  let segments:Vec<_>=self.diagram.edges.iter().map(|edge|{let a=&self.diagram.cards[edge.from];let b=&self.diagram.cards[edge.to];(a.x,a.y,a.h,b.x,b.y,b.h,edge.side,visual::edge_style(self.selected.as_deref(),&a.id,&b.id))}).collect();
+  let running=crate::ui::pi_trace::State::Running;
+  let pulse=if self.diagram.cards.iter().any(|card|self.trace_state(card)==Some(running)){
+   window.request_animation_frame();
+   use std::sync::OnceLock;
+   static START:OnceLock<std::time::Instant>=OnceLock::new();
+   (START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32()*5.).sin()*0.5+0.5
+  }else{0.};
+  let runtime_color=|state:crate::ui::pi_trace::State|if state==running{0x4e80dd+(((pulse*71.)as u32)<<8)+(pulse*34.)as u32}else{state.color()};
+  let segments:Vec<_>=self.diagram.edges.iter().map(|edge|{let a=&self.diagram.cards[edge.from];let b=&self.diagram.cards[edge.to];(a.x,a.y,a.h,b.x,b.y,b.h,edge.side,(if edge.side {self.trace_state(b)}else{None}).map(|state|visual::EdgeStyle{color:runtime_color(state),width:if state==running{2.5+pulse*2.}else{3.},alpha:1.,related:true}).unwrap_or_else(||visual::edge_style(self.selected.as_deref(),&a.id,&b.id)))}).collect();
   let mut content=div().absolute().inset_0().overflow_hidden().child(canvas(move|bounds,_,app|{let old=bounds_cell.replace(bounds);if old.size!=bounds.size{app.notify(entity_id);}},move|bounds,_,window,_|{
    let grid=24.;for x in 0..((f32::from(bounds.size.width)/grid).ceil()as usize+1){for y in 0..((f32::from(bounds.size.height)/grid).ceil()as usize+1){let at=bounds.origin+point(px(f32::from(camera.x).rem_euclid(grid)+x as f32*grid),px(f32::from(camera.y).rem_euclid(grid)+y as f32*grid));window.paint_quad(fill(Bounds::new(at,size(px(1.),px(1.))),rgb(0x2b2e35)));}}
    for(ax,ay,ah,bx,by,bh,side,style)in segments{
@@ -99,7 +113,7 @@ impl Render for FlowCanvas{
   for(i,card)in self.diagram.cards.iter().enumerate(){
    let color=match card.kind{"main"=>0xb5a2ce,"subroot"|"call"=>0x62c7c7,_=>0x4ea1ff};
    let (label,glyph)=match card.kind{"main"=>("MAIN SKILL",Icon::Skill),"subroot"=>("SUBFLOW ROOT",Icon::Skill),"call"=>("SUBFLOW",Icon::Branch),_=>("PHASE / STEP",Icon::Layers)};
-   let selected=self.selected.as_deref()==Some(card.id.as_str());let border=if selected{visual::INCOMING}else{BORDER};
+   let runtime=self.trace_state(card);let selected=self.selected.as_deref()==Some(card.id.as_str());let border=runtime.map(runtime_color).unwrap_or(if selected{visual::INCOMING}else{BORDER});
    let path=card.source.clone();let line=card.line;let click_path=card.source.clone();let click_line=card.line;let is_call=card.kind=="call";
    let select_id=card.id.clone();let source_id=card.id.clone();
    let filename=card.source.rsplit('/').next().unwrap_or(&card.source).to_string();
@@ -111,13 +125,13 @@ impl Render for FlowCanvas{
    }
    let mut card_view=div().id(SharedString::from(format!("flow-card:{}",card.id))).absolute().left(camera.x+px(card.x*z)).top(camera.y+px(card.y*z))
     .w(px(CARD_W*z)).h(px(card.h*z)).bg(rgb(if selected{RAISED}else{BG})).rounded(px(9.)).border_color(rgb(border)).overflow_hidden().flex().flex_col().cursor_pointer().shadow_md();
-   card_view=if selected{card_view.border_2()}else{card_view.border_1()};
+   card_view=if selected||runtime.is_some(){card_view.border_2()}else{card_view.border_1()};
    card_view=card_view
-    .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.))).rounded(px(2.)).bg(rgb(color)))
+    .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.)+if runtime==Some(running){pulse*4.}else{0.})).rounded(px(2.)).bg(rgb(runtime.map(runtime_color).unwrap_or(color))))
     .child(div().flex_1().min_h(px(0.)).px(px(15.*z)).py(px(11.*z)).flex().flex_col().gap(px(5.*z))
      .child(div().h(px(18.*z)).flex_none().flex().items_center().justify_between().line_height(px((13.*z).max(10.)))
       .child(div().flex().items_center().gap(px(5.*z)).text_color(rgb(color)).text_size(px((10.*z).max(8.))).font_weight(FontWeight::SEMIBOLD)
-       .child(icon(glyph).size(px((13.*z).max(9.))).text_color(rgb(color))).child(label))
+       .child(icon(glyph).size(px((13.*z).max(9.))).text_color(rgb(color))).child(if runtime==Some(crate::ui::pi_trace::State::Running){"● RUNNING"}else{label}))
       .child(div().text_size(px((10.*z).max(8.))).text_color(rgb(if selected{visual::INCOMING}else{DIM})).child(if selected{"SELECTED".into()}else{format!("L{}",card.line)})))
      .child(div().h(px(if compact{45.*z}else{44.*z})).flex_none().overflow_hidden().text_size(px((16.*z).max(8.))).line_height(px((21.*z).max(10.))).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(card.title.clone()))
      .children((!compact).then(||{

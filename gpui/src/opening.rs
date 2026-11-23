@@ -47,7 +47,9 @@ impl Studio{
                         this.scope=if single||!has_skills{crate::filter::Scope::All}else{crate::filter::Scope::Direct};
                         if single||!has_skills{this.flow_mode=has_skills&& !graph.flows.is_empty();}
                         let cwd=std::path::PathBuf::from(&graph.root);this.terminal.update(cx,|t,_|t.target_directory(cwd));
-                        this.graph=Some(graph);this.workspace_file=file.clone();this.documents.clear();this.selected=None;this.original.clear();this.conflict=false;this.find_open=false;
+                        this.pi_trace.update(cx, |trace, cx| trace.stop(cx));
+                        this.pi_trace_visible=false;
+                        this.graph=Some(graph);this.diagnostics=this.graph.as_ref().map(crate::diagnostics::check).unwrap_or_default();this.workspace_file=file.clone();this.documents.clear();this.selected=None;this.original.clear();this.conflict=false;this.find_open=false;
                         this.start_watcher(window,cx);
                         if let Some(id)=file{this.select_file(id,true,window,cx);}else{this.status="Folder opened · drop a file to open it in place".into();}
                     }

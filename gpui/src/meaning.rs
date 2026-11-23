@@ -47,7 +47,7 @@ fn cleaned_title(title:&str)->String{
 pub fn document(title:&str,source:&str)->Meaning{
  let mut meaning=extract(title,1,source,1);let items=blocks(source,1);
  // A route mentioned in a Skill's overview is not the entry condition of the entire Skill.
- meaning.condition=field(&items,&["触发条件","触发","执行条件","前提","条件"]);
+ meaning.condition=field(&items,&["触发条件","触发","执行条件","前提","条件","trigger condition","trigger","precondition"]);
  meaning.confirmation=field(&items,&["确认要求","用户确认"]);meaning
 }
 pub fn extract(title:&str,title_line:usize,source:&str,base_line:usize)->Meaning{
@@ -63,7 +63,7 @@ pub fn extract(title:&str,title_line:usize,source:&str,base_line:usize)->Meaning
  else if !clean.chars().any(|c|('\u{4e00}'..='\u{9fff}').contains(&c))&&explicit_purpose{
   let mut action=purpose.clone().unwrap();action.text=short(&action.text,48);action
  }else{Excerpt{text:clean,line:title_line}};
- let condition=field(&items,&["触发条件","触发","执行条件","前提","条件"]).or_else(||{
+ let condition=field(&items,&["触发条件","触发","执行条件","前提","条件","trigger condition","trigger","precondition"]).or_else(||{
   for (open,close)in [('（','）'),('(',')')]{if let Some(start)=title.find(open){if let Some(end)=title[start..].find(close){let text=&title[start+open.len_utf8()..start+end];if text.contains("仅")||text.contains("only"){return Some(Excerpt{text:text.into(),line:title_line});}}}}
   items.iter().find(|b|["仅当","只有","当用户","用户同意","用户明确要求"].iter().any(|p|b.value.text.starts_with(p))).map(|b|sentence(&b.value,90))
  });

@@ -26,7 +26,8 @@ impl Studio {
         let link_count=entity.read(cx).references.len();
         if self.flow_canvas.is_none(){let owner=cx.entity().downgrade();self.flow_canvas=Some(cx.new(|_|flow::FlowCanvas::new(owner)));}
         let flow_entity=self.flow_canvas.as_ref().unwrap().clone();
-        flow_entity.update(cx,|canvas,cx|canvas.sync(self.graph_revision,graph,cx));
+        let paths=self.pi_trace.read(cx).paths();
+        flow_entity.update(cx,|canvas,cx|{canvas.sync(self.graph_revision,graph,cx);canvas.set_trace(paths,cx);});
         panel=panel.child(bar().bg(rgb(PANEL)).child(div().flex_1().min_w(px(0.)).flex().items_center().gap(px(8.)).child(icon(Icon::Graph).text_color(rgb(ACCENT))).child(if self.flow_mode{"Skill orchestration"}else{"Reference graph"}).child(caption(if self.flow_mode{"Document stages · candidate".into()}else{format!("{} nodes · {link_count} links",visible.len())})))
             .child(icon_button("graph-refresh",Icon::Refresh,"Refresh workspace index",false,true).on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx)))));
         let mut scopes=div().flex().gap(px(2.)).p(px(2.)).bg(rgb(BG)).rounded(px(6.));

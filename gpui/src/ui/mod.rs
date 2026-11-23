@@ -8,6 +8,8 @@ mod chrome;
 mod explorer;
 mod file_preview;
 pub(crate) mod terminal;
+pub(crate) mod pi_trace;
+mod problems;
 use crate::{commands::Command, filter, role, Studio, TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview, ToggleTerminal};
 use controls::*;
 use icons::{icon,Icon,file_icon,command_icon};
@@ -17,6 +19,10 @@ use theme::rgb;
 use gpui_base::{Editor, InputBase};
 
 impl Studio {
+    fn terminal_with_trace(&self,cx:&App)->Div {
+        div().size_full().flex().flex_col().child(div().flex_1().min_h(px(0.)).child(self.terminal.clone()))
+            .children(self.pi_trace_visible.then(||div().h(px(if self.pi_trace.read(cx).expanded {112.}else{32.})).flex_none().child(self.pi_trace.clone())))
+    }
     fn document_panel(&self,cx:&mut Context<Self>)->Div {
         let dirty=self.dirty(cx);
         let preview=self.is_preview();
@@ -52,6 +58,9 @@ impl Studio {
             .children(text.then(||icon_button("editor-find",Icon::Search,"Find in document · Ctrl/Cmd+F",self.find_open,true).on_click(cx.listener(|this,_,w,cx|this.open_find(w,cx)))))
             .children((text&&!preview).then(||icon_button("editor-wrap",Icon::Wrap,"Toggle word wrap",self.preferences.soft_wrap,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
             .children((text&&!preview).then(||icon_button("editor-numbers",Icon::Numbers,"Toggle line numbers",self.preferences.line_numbers,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
+            .child(icon_button("document-problems",Icon::BrokenLink,"Show/Hide Problems",self.problems_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_problems(w,cx))))
+            .child(icon_label("document-pi-debug",Icon::Play,"Debug",self.pi_trace.read(cx).active(),self.graph.is_some()).on_click(cx.listener(|this,_,w,cx|this.start_pi_debug(w,cx))))
+            .children(self.pi_trace.read(cx).active().then(||icon_button("document-pi-debug-stop",Icon::Stop,"Stop Pi debugging and stop collecting trace events",false,true).text_color(rgb(0xdc8c95)).on_click(cx.listener(|this,_,_,cx|this.pi_trace.update(cx,|trace,cx|trace.stop(cx))))))
             .child(icon_button("document-terminal",Icon::Terminal,"显示/收起本地终端 · Ctrl+`",self.terminal_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
             .child(icon_button("document-menu",Icon::More,"Document actions",false,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.document_menu=!this.document_menu;cx.notify();}}))));
         if let Some(id)=&self.selected {
@@ -157,14 +166,16 @@ impl Render for Studio {
         let available=(f32::from(window.viewport_size().height)-70.).max(300.);
         self.terminal_height=crate::terminal::dock_height(self.terminal_height,available);
         let document=if self.terminal_visible&&self.terminal_maximized{
-            div().relative().size_full().child(self.terminal.clone())
+            self.terminal_with_trace(cx)
         }else{
             let editor=self.document_panel(cx);
+            let bottom_visible=self.terminal_visible||self.problems_visible||self.pi_trace_visible;
             let mut document=div().relative().size_full().flex().flex_col().overflow_hidden().child(div().flex_1().min_h(px(0.)).child(editor));
-            if self.terminal_visible{
-                document=document.child(div().id("terminal-divider").h(px(6.)).w_full().flex_none().cursor_row_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))
+            if bottom_visible{
+                let bottom=if self.problems_visible{self.problems_panel(cx)}else{self.terminal_with_trace(cx)};
+                document=document.child(div().id("bottom-panel-divider").h(px(6.)).w_full().flex_none().cursor_row_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))
                     .on_mouse_down(MouseButton::Left,cx.listener(|this,e:&MouseDownEvent,w,cx|{if !this.composition_ready(w,cx){return;}this.terminal_drag=Some(crate::terminal::DockDrag{origin:f32::from(e.position.y),height:this.terminal_height,draft:this.terminal_height});this.focus_handle.focus(w,cx);cx.stop_propagation();cx.notify();})))
-                    .child(div().h(px(self.terminal_height)).w_full().flex_none().child(self.terminal.clone()))
+                    .child(div().h(px(self.terminal_height)).w_full().flex_none().child(bottom))
                     .children(self.terminal_drag.as_ref().map(|d|div().absolute().bottom(px(d.draft+2.)).left(px(0.)).right(px(0.)).h(px(2.)).bg(rgb(ACCENT))));
             }document
         };
