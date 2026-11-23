@@ -14,7 +14,7 @@ pub(super) fn resize_events(owner:WeakEntity<Studio>)->impl IntoElement{
                     drag.draft=crate::terminal::dock_height(drag.height-(f32::from(event.position.y)-drag.origin),f32::from(window.viewport_size().height)-70.);cx.notify();return true;
                 }
                 if !this.panes.dragging(){return false;}
-                if this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width)){cx.notify();}true
+                if this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width)-Studio::ACTIVITY_WIDTH){cx.notify();}true
             }).unwrap_or(false);
             if handled{window.prevent_default();cx.stop_propagation();}
         });
@@ -24,7 +24,7 @@ pub(super) fn resize_events(owner:WeakEntity<Studio>)->impl IntoElement{
             let handled=released.update(cx,|this,cx|{
                 if let Some(drag)=this.terminal_drag.take(){this.terminal_height=drag.draft;cx.notify();return true;}
                 if !this.panes.dragging(){return false;}
-                this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width));
+                this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width)-Studio::ACTIVITY_WIDTH);
                 this.panes.commit();cx.notify();true
             }).unwrap_or(false);
             if handled{window.prevent_default();cx.stop_propagation();}
@@ -58,8 +58,7 @@ impl Studio {
             });
         div().h(px(44.)).flex_none().pl(px(12.)).flex().items_center().gap(px(4.)).border_b_1().border_color(rgb(BORDER)).bg(rgb(PANEL))
             .child(drag)
-            .child(icon_button("command-trigger",Icon::Command,"Command palette · Ctrl/Cmd+Shift+P",self.palette,true).on_click(cx.listener(|this,_,w,cx|this.toggle_palette(w,cx))))
-            .child(icon_button("settings-trigger",Icon::Settings,"Settings",self.settings_open,true).on_click(cx.listener(|this,_,w,cx|this.open_settings(w,cx))))
+
             .child(separator())
             .child(icon_button("window-minimize",Icon::Minus,"Minimize window",false,true).w(px(38.)).h_full().rounded(px(0.)).on_click(|_,w,_|w.minimize_window()))
             .child(icon_button("window-maximize",if window.is_maximized(){Icon::Restore}else{Icon::Maximize},if window.is_maximized(){"Restore window"}else{"Maximize window"},false,true).w(px(38.)).h_full().rounded(px(0.)).on_click(|_,w,_|toggle_maximize(w)))

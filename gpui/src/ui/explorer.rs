@@ -45,8 +45,7 @@ impl Studio {
     pub(super) fn sidebar(&self,cx:&mut Context<Self>)->Div{
         let name=self.graph.as_ref().and_then(|g|std::path::Path::new(&g.root).file_name()).map(|s|s.to_string_lossy().into_owned()).unwrap_or_else(||"Local workspace".into());
         let header=div().px(px(14.)).pt(px(12.)).pb(px(10.)).flex().flex_col().gap(px(10.))
-            .child(div().h(px(24.)).flex().items_center().justify_between().child(caption("EXPLORER"))
-                .child(icon_button("sidebar-open",Icon::FolderOpen,"Open workspace",false,true).w(px(24.)).h(px(24.)).on_click(cx.listener(|this,_,w,cx|this.open(w,cx)))))
+            .child(div().h(px(24.)).flex().items_center().justify_between().child(caption("EXPLORER")))
             .child(div().flex().items_center().gap(px(8.)).child(icon(Icon::FolderOpen).size(px(15.)).text_color(rgb(ACCENT)))
                 .child(div().flex_1().min_w(px(0.)).truncate().font_weight(FontWeight::SEMIBOLD).text_size(px(13.)).child(name)))
             .child(input("file-search",&self.search));

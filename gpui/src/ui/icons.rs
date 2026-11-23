@@ -62,7 +62,7 @@ impl Icon {
         Self::Mouse=>"M6 9a6 6 0 0 1 12 0v6a6 6 0 0 1-12 0z M12 3v7 M9 8l3 3 3-3",
     }}
     fn path(self)->String {format!("icons/{}.svg",self.name())}
-    fn bytes(self)->Vec<u8> {format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="{}" fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>"#,self.paths()).into_bytes()}
+    fn bytes(self)->Vec<u8> {let transform=if matches!(self,Self::Command){r#" transform="rotate(90 12 12)""#}else{""};format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="{}"{transform} fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>"#,self.paths()).into_bytes()}
 }
 pub fn icon(icon: Icon)->Svg {svg().path(icon.path()).size(px(16.)).flex_none().text_color(rgb(super::theme::MUTED))}
 pub fn file_icon(kind:&str)->Icon {match kind {"skill"|"main"=>Icon::Skill,"script"=>Icon::Code,"subflow"=>Icon::Branch,"missing"=>Icon::BrokenLink,_=>Icon::File}}

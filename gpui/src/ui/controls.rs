@@ -21,8 +21,11 @@ impl Render for Hint {
     }
 }
 pub fn icon_button(id:impl Into<ElementId>,glyph:Icon,hint:impl Into<SharedString>,active:bool,enabled:bool)->Stateful<Div> {
+    sized_icon_button(id,glyph,hint,active,enabled,15.)
+}
+pub(super) fn sized_icon_button(id:impl Into<ElementId>,glyph:Icon,hint:impl Into<SharedString>,active:bool,enabled:bool,icon_size:f32)->Stateful<Div> {
     let hint=hint.into();
-    button(id,"",active,enabled).aria_label(hint.clone()).group("icon-button").w(px(28.)).px(px(0.)).gap(px(0.)).child(icon(glyph).size(px(15.)).text_color(rgb(if !enabled{DIM}else if active{TEXT}else{MUTED})).group_hover("icon-button",move|style|style.text_color(rgb(if enabled{TEXT}else{DIM}))))
+    button(id,"",active,enabled).aria_label(hint.clone()).group("icon-button").w(px(28.)).px(px(0.)).gap(px(0.)).child(icon(glyph).size(px(icon_size)).text_color(rgb(if !enabled{DIM}else if active{TEXT}else{MUTED})).group_hover("icon-button",move|style|style.text_color(rgb(if enabled{TEXT}else{DIM}))))
         .tooltip(move|_,cx|cx.new(|_|Hint(hint.clone())).into())
 }
 pub fn swatch(id:impl Into<ElementId>,color:u32,hint:&'static str,selected:bool)->Stateful<Div> {

@@ -19,20 +19,27 @@ use theme::rgb;
 use gpui_base::{Editor, InputBase};
 
 impl Studio {
-    fn action_bar(&self,cx:&mut Context<Self>)->Div {
+    const ACTIVITY_WIDTH: f32 = 50.;
+
+    fn activity_rail(&self,cx:&mut Context<Self>)->Div {
         let debug=self.pi_trace.read(cx).active();
-        let enabled=self.graph.is_some();
-        bar().h(px(36.)).bg(rgb(PANEL))
-            .child(button("menu-debug","",debug,enabled||debug)
-                .child(icon(if debug{Icon::Stop}else{Icon::Play}).text_color(rgb(if debug{0xdc8c95}else if enabled{GREEN}else{DIM})))
-                .child(if debug{"Stop Debug"}else{"Debug"})
+        let enabled=self.graph.is_some()||debug;
+        let debug_hint=if debug{"Stop Debug"}else{"Start Debug"};
+        div().w(px(Self::ACTIVITY_WIDTH)).h_full().flex_none().flex().flex_col().items_center().gap(px(6.)).pt(px(8.)).bg(rgb(PANEL)).border_r_1().border_color(rgb(BORDER))
+            .child(sized_icon_button("activity-open",Icon::FolderOpen,"Open workspace",false,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.open(w,cx))))
+            .child(button("activity-debug","",debug,enabled).size(px(38.)).px(px(0.)).aria_label(debug_hint)
+                .child(icon(if debug{Icon::Stop}else{Icon::Play}).size(px(24.)).text_color(rgb(if debug{0xdc8c95}else if enabled{GREEN}else{DIM})))
+                .tooltip(move|_,cx|cx.new(|_|Hint(debug_hint.into())).into())
                 .on_click(cx.listener(|this,_,w,cx|{
                     if this.pi_trace.read(cx).active(){this.pi_trace.update(cx,|trace,cx|trace.stop(cx));}
-                    else{this.start_pi_debug(w,cx);}
+                    else if this.graph.is_some(){this.start_pi_debug(w,cx);}
                 })))
-            .child(separator())
-            .child(icon_label("menu-problems",Icon::BrokenLink,"Show Errors",self.problems_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_problems(w,cx))))
-            .child(icon_label("menu-terminal",Icon::Terminal,"Terminal",self.terminal_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
+            .child(sized_icon_button("activity-problems",Icon::BrokenLink,"Show / hide Problems",self.problems_visible,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.toggle_problems(w,cx))))
+            .child(sized_icon_button("activity-terminal",Icon::Terminal,"Show / hide Terminal",self.terminal_visible,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
+            .child(div().flex_1())
+            .child(sized_icon_button("activity-command",Icon::Command,"Command palette · Ctrl/Cmd+Shift+P",self.palette,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.toggle_palette(w,cx))))
+            .child(sized_icon_button("activity-settings",Icon::Settings,"Settings",self.settings_open,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.open_settings(w,cx))))
+            .child(div().h(px(2.)).flex_none())
     }
 
     fn terminal_with_trace(&self,cx:&App)->Div {
@@ -168,7 +175,7 @@ impl Studio {
 
 impl Render for Studio {
     fn render(&mut self,window:&mut Window,cx:&mut Context<Self>)->impl IntoElement {
-        let width=f32::from(window.viewport_size().width);self.panes.fit(width);
+        let width=f32::from(window.viewport_size().width)-Self::ACTIVITY_WIDTH;self.panes.fit(width);
         let guide=self.panes.guide(width);
         let query=self.search.read(cx).value().to_string();
         let visible=self.graph.as_ref().map(|g|filter::visible(g,self.scope,if self.focus{self.selected.as_deref()}else{None},&query,self.show_missing)).unwrap_or_default();
@@ -212,14 +219,14 @@ impl Render for Studio {
             .on_action(cx.listener(|this,_:&CloseOverlay,w,cx|{if this.terminal_drag.take().is_some()||this.panes.cancel(){cx.notify();}else{this.close_overlay(w,cx);}}))
             .child(resize_events)
             .child(titlebar)
-            .child(self.action_bar(cx))
             .child(div().relative().flex_1().min_h(px(0.)).flex().overflow_hidden()
+                .child(self.activity_rail(cx))
                 .child(div().w(px(self.panes.workspace)).h_full().flex_none().child(sidebar))
                 .child(self.pane_handle(crate::panes::Divider::Workspace,"workspace-divider",cx))
                 .child(div().flex_1().min_w(px(150.)).h_full().child(graph))
                 .child(self.pane_handle(crate::panes::Divider::Editor,"editor-divider",cx))
                 .child(div().w(px(self.panes.editor)).h_full().flex_none().child(document))
-                .children(guide.map(|x|div().absolute().left(px(x-1.)).top(px(0.)).bottom(px(0.)).w(px(2.)).bg(rgb(ACCENT)))))
+                .children(guide.map(|x|div().absolute().left(px(x+Self::ACTIVITY_WIDTH-1.)).top(px(0.)).bottom(px(0.)).w(px(2.)).bg(rgb(ACCENT)))))
             .child(div().h(px(26.)).flex_none().px(px(12.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().gap(px(8.)).bg(rgb(PANEL))
                 .child(div().w(px(5.)).h(px(5.)).rounded_full().bg(rgb(if self.conflict{WARNING}else{GREEN})))
                 .child(div().flex_1().truncate().text_size(px(11.5)).text_color(rgb(MUTED)).child(status))
