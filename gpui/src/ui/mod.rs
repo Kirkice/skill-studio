@@ -154,16 +154,20 @@ impl Render for Studio {
         self.explorer.filter(&query,self.focus.then_some(&visible));
         let sidebar=self.sidebar(cx);
         let graph=self.graph_view(&visible,cx);
-        let editor=self.document_panel(cx);
         let available=(f32::from(window.viewport_size().height)-70.).max(300.);
         self.terminal_height=crate::terminal::dock_height(self.terminal_height,available);
-        let mut document=div().relative().size_full().flex().flex_col().overflow_hidden().child(div().flex_1().min_h(px(0.)).child(editor));
-        if self.terminal_visible{
-            document=document.child(div().id("terminal-divider").h(px(6.)).w_full().flex_none().cursor_row_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))
-                .on_mouse_down(MouseButton::Left,cx.listener(|this,e:&MouseDownEvent,w,cx|{this.terminal_drag=Some(crate::terminal::DockDrag{origin:f32::from(e.position.y),height:this.terminal_height,draft:this.terminal_height});this.focus_handle.focus(w,cx);cx.stop_propagation();cx.notify();})))
-                .child(div().h(px(self.terminal_height)).w_full().flex_none().child(self.terminal.clone()))
-                .children(self.terminal_drag.as_ref().map(|d|div().absolute().bottom(px(d.draft+2.)).left(px(0.)).right(px(0.)).h(px(2.)).bg(rgb(ACCENT))));
-        }
+        let document=if self.terminal_visible&&self.terminal_maximized{
+            div().relative().size_full().child(self.terminal.clone())
+        }else{
+            let editor=self.document_panel(cx);
+            let mut document=div().relative().size_full().flex().flex_col().overflow_hidden().child(div().flex_1().min_h(px(0.)).child(editor));
+            if self.terminal_visible{
+                document=document.child(div().id("terminal-divider").h(px(6.)).w_full().flex_none().cursor_row_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))
+                    .on_mouse_down(MouseButton::Left,cx.listener(|this,e:&MouseDownEvent,w,cx|{if !this.composition_ready(w,cx){return;}this.terminal_drag=Some(crate::terminal::DockDrag{origin:f32::from(e.position.y),height:this.terminal_height,draft:this.terminal_height});this.focus_handle.focus(w,cx);cx.stop_propagation();cx.notify();})))
+                    .child(div().h(px(self.terminal_height)).w_full().flex_none().child(self.terminal.clone()))
+                    .children(self.terminal_drag.as_ref().map(|d|div().absolute().bottom(px(d.draft+2.)).left(px(0.)).right(px(0.)).h(px(2.)).bg(rgb(ACCENT))));
+            }document
+        };
         let overlay=self.overlays(window,cx);
         let explorer_menu=self.explorer_context_menu(window,cx);
         let root=self.graph.as_ref().map(|g|g.root.clone()).unwrap_or_else(||"No workspace open".into());

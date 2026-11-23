@@ -21,15 +21,15 @@ use gpui::*;
 use gpui_base::input::{EditorState, InputState, InputEvent};
 actions!(studio, [TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview, ToggleTerminal]);
 
-struct Studio { terminal:Entity<ui::terminal::TerminalView>,terminal_visible:bool,terminal_height:f32,terminal_drag:Option<terminal::DockDrag>,closing_pending:bool, explorer_menu:Option<explorer::ContextMenu>, open_ticket:u64, workspace_file:Option<String>, dragging_external:bool, explorer:explorer::Explorer, panes:panes::Panes, flow_canvas:Option<Entity<ui::graph::flow::FlowCanvas>>, flow_mode:bool, documents:documents::Documents<Entity<EditorState>>, graph_canvas: Option<Entity<ui::graph::GraphCanvas>>, graph_revision: u64, saving: bool, refreshing: bool, refresh_pending: bool, find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, zoom: f32, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
+struct Studio { terminal:Entity<ui::terminal::TerminalView>,terminal_visible:bool,terminal_maximized:bool,terminal_height:f32,terminal_drag:Option<terminal::DockDrag>,closing_pending:bool, explorer_menu:Option<explorer::ContextMenu>, open_ticket:u64, workspace_file:Option<String>, dragging_external:bool, explorer:explorer::Explorer, panes:panes::Panes, flow_canvas:Option<Entity<ui::graph::flow::FlowCanvas>>, flow_mode:bool, documents:documents::Documents<Entity<EditorState>>, graph_canvas: Option<Entity<ui::graph::GraphCanvas>>, graph_revision: u64, saving: bool, refreshing: bool, refresh_pending: bool, find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, zoom: f32, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
 impl Studio {
     fn toggle_terminal(&mut self,window:&mut Window,cx:&mut Context<Self>){
         if !self.composition_ready(window,cx){return;}
         self.terminal_visible=!self.terminal_visible;
         if self.terminal_visible{
             let cwd=self.graph.as_ref().map(|g|std::path::PathBuf::from(&g.root)).or_else(dirs::home_dir).unwrap_or_else(||std::path::PathBuf::from("."));
-            self.terminal.update(cx,|t,cx|{t.invalidate(self.preferences.font_size,cx);t.start(cwd,window,cx);});
-        }else if self.active_text(){self.editor.update(cx,|e,cx|e.focus(window,cx));}else{self.focus_handle.focus(window,cx);}
+            self.terminal.update(cx,|t,cx|{t.invalidate(self.preferences.terminal_font_size,self.preferences.terminal_line_height,cx);t.start(cwd,window,cx);});
+        }else{self.terminal.update(cx,|t,cx|t.dismiss_menu(cx));if self.active_text(){self.editor.update(cx,|e,cx|e.focus(window,cx));}else{self.focus_handle.focus(window,cx);}}
         cx.notify();
     }
     fn request_close(&mut self,window:&mut Window,cx:&mut Context<Self>)->bool{
@@ -57,7 +57,7 @@ impl Studio {
     }
     fn apply_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         ui::theme::install(&self.preferences,cx);
-        self.terminal.update(cx,|t,cx|t.invalidate(self.preferences.font_size,cx));
+        self.terminal.update(cx,|t,cx|t.invalidate(self.preferences.terminal_font_size,self.preferences.terminal_line_height,cx));
         if let Some(canvas)=&self.graph_canvas{canvas.update(cx,|_,cx|cx.notify());}
         if let Some(canvas)=&self.flow_canvas{canvas.update(cx,|_,cx|cx.notify());}
         let wrap=self.preferences.soft_wrap;let numbers=self.preferences.line_numbers;
@@ -124,8 +124,9 @@ impl Studio {
         !composing
     }
     fn activate_tab(&mut self,id:&str,window:&mut Window,cx:&mut Context<Self>){
-        if self.selected.as_deref()!=Some(id)&&!self.composition_ready(window,cx){return;}
+        if (self.selected.as_deref()!=Some(id)||self.terminal.read(cx).composing())&&!self.composition_ready(window,cx){return;}
         let Some(tab)=self.documents.get(id)else{return;};
+        if self.terminal_maximized{self.terminal_maximized=false;self.terminal.update(cx,|t,cx|t.restore_document(cx));}
         self.explorer.reveal(id);
         self.selected=Some(id.into());self.editor=tab.editor.clone();self.original=tab.original.clone();self.conflict=tab.conflict;
         self.role_menu=false;self.document_menu=false;
@@ -390,9 +391,16 @@ fn main() {
                 cx.subscribe(&find_query,|this: &mut Studio,query,event,cx|{if matches!(event,InputEvent::Change){if this.find_open{let query=query.read(cx).value().to_string();this.editor.update(cx,|s,cx|s.set_search_query(query,true,cx));}cx.notify();}}).detach();
                 cx.subscribe(&command_search, |this: &mut Studio, _, event,cx| { if matches!(event,InputEvent::Change){this.palette_index=0;cx.notify();} }).detach();
                 cx.subscribe(&search, |_: &mut Studio, _, event,cx| {if matches!(event,InputEvent::Change){cx.notify();}}).detach();
-                let terminal=cx.new(ui::terminal::TerminalView::new);
-                cx.subscribe_in(&terminal,window,|this:&mut Studio,_,_:&ui::terminal::TerminalEvent,w,cx|{this.terminal_visible=false;this.terminal_drag=None;if this.active_text(){this.editor.update(cx,|e,cx|e.focus(w,cx));}else{this.focus_handle.focus(w,cx);}cx.notify();}).detach();
-                Studio { terminal,terminal_visible:false,terminal_height:260.,terminal_drag:None,closing_pending:false, explorer_menu:None, open_ticket:0, workspace_file:None, dragging_external:false, explorer:Default::default(), panes:Default::default(), flow_canvas:None, flow_mode:true, documents:Default::default(), graph_canvas: None, graph_revision: 0, saving: false, refreshing: false, refresh_pending: false, find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), zoom: 1., palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
+                let terminal=cx.new(|cx|ui::terminal::TerminalView::new(preferences.terminal_font_size,preferences.terminal_line_height,cx));
+                cx.subscribe_in(&terminal,window,|this:&mut Studio,_,event:&ui::terminal::TerminalEvent,w,cx|{
+                    match event{
+                        ui::terminal::TerminalEvent::Hide=>{this.terminal_visible=false;this.terminal_drag=None;if this.active_text(){this.editor.update(cx,|e,cx|e.focus(w,cx));}else{this.focus_handle.focus(w,cx);}},
+                        ui::terminal::TerminalEvent::Maximize(value)=>{this.terminal_maximized=*value;this.terminal_visible=true;this.terminal_drag=None;},
+                        ui::terminal::TerminalEvent::FontSize(size)=>{this.preferences.terminal_font_size=*size;if let Err(e)=settings::save(&this.preferences){this.status=format!("Unable to save terminal preferences: {e}");}},
+                        ui::terminal::TerminalEvent::LineHeight(height)=>{this.preferences.terminal_line_height=*height;if let Err(e)=settings::save(&this.preferences){this.status=format!("Unable to save terminal preferences: {e}");}},
+                    }cx.notify();
+                }).detach();
+                Studio { terminal,terminal_visible:false,terminal_maximized:false,terminal_height:320.,terminal_drag:None,closing_pending:false, explorer_menu:None, open_ticket:0, workspace_file:None, dragging_external:false, explorer:Default::default(), panes:Default::default(), flow_canvas:None, flow_mode:true, documents:Default::default(), graph_canvas: None, graph_revision: 0, saving: false, refreshing: false, refresh_pending: false, find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), zoom: 1., palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
             });
             studio.read(cx).focus_handle.clone().focus(window, cx);
             if let Some(path)=&initial_workspace {

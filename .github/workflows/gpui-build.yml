@@ -19,6 +19,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> gpui/target"
+      - name: Stage pinned Windows ConPTY runtime
+        if: runner.os == 'Windows'
+        run: |
+          python ../tools/prepare_conpty.py --profile debug
+          python ../tools/prepare_conpty.py --profile release
       - run: cargo test --locked
       - run: cargo build --release --locked
       - name: Package Windows executable
@@ -27,6 +32,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item target/release/skill-studio-gpui.exe package/
+          Copy-Item target/release/conpty.dll,target/release/OpenConsole.exe package/
           Copy-Item ../README.md package/README.txt
           Copy-Item ../THIRD-PARTY-NOTICES.md package/
           New-Item -ItemType Directory -Force package/licenses | Out-Null
