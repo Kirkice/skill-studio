@@ -19,6 +19,22 @@ use theme::rgb;
 use gpui_base::{Editor, InputBase};
 
 impl Studio {
+    fn action_bar(&self,cx:&mut Context<Self>)->Div {
+        let debug=self.pi_trace.read(cx).active();
+        let enabled=self.graph.is_some();
+        bar().h(px(36.)).bg(rgb(PANEL))
+            .child(button("menu-debug","",debug,enabled||debug)
+                .child(icon(if debug{Icon::Stop}else{Icon::Play}).text_color(rgb(if debug{0xdc8c95}else if enabled{GREEN}else{DIM})))
+                .child(if debug{"Stop Debug"}else{"Debug"})
+                .on_click(cx.listener(|this,_,w,cx|{
+                    if this.pi_trace.read(cx).active(){this.pi_trace.update(cx,|trace,cx|trace.stop(cx));}
+                    else{this.start_pi_debug(w,cx);}
+                })))
+            .child(separator())
+            .child(icon_label("menu-problems",Icon::BrokenLink,"Show Errors",self.problems_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_problems(w,cx))))
+            .child(icon_label("menu-terminal",Icon::Terminal,"Terminal",self.terminal_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
+    }
+
     fn terminal_with_trace(&self,cx:&App)->Div {
         div().size_full().flex().flex_col().child(div().flex_1().min_h(px(0.)).child(self.terminal.clone()))
             .children(self.pi_trace_visible.then(||div().h(px(if self.pi_trace.read(cx).expanded {112.}else{32.})).flex_none().child(self.pi_trace.clone())))
@@ -58,10 +74,7 @@ impl Studio {
             .children(text.then(||icon_button("editor-find",Icon::Search,"Find in document · Ctrl/Cmd+F",self.find_open,true).on_click(cx.listener(|this,_,w,cx|this.open_find(w,cx)))))
             .children((text&&!preview).then(||icon_button("editor-wrap",Icon::Wrap,"Toggle word wrap",self.preferences.soft_wrap,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
             .children((text&&!preview).then(||icon_button("editor-numbers",Icon::Numbers,"Toggle line numbers",self.preferences.line_numbers,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
-            .child(icon_button("document-problems",Icon::BrokenLink,"Show/Hide Problems",self.problems_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_problems(w,cx))))
-            .child(icon_label("document-pi-debug",Icon::Play,"Debug",self.pi_trace.read(cx).active(),self.graph.is_some()).on_click(cx.listener(|this,_,w,cx|this.start_pi_debug(w,cx))))
-            .children(self.pi_trace.read(cx).active().then(||icon_button("document-pi-debug-stop",Icon::Stop,"Stop Pi debugging and stop collecting trace events",false,true).text_color(rgb(0xdc8c95)).on_click(cx.listener(|this,_,_,cx|this.pi_trace.update(cx,|trace,cx|trace.stop(cx))))))
-            .child(icon_button("document-terminal",Icon::Terminal,"显示/收起本地终端 · Ctrl+`",self.terminal_visible,true).on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
+
             .child(icon_button("document-menu",Icon::More,"Document actions",false,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.document_menu=!this.document_menu;cx.notify();}}))));
         if let Some(id)=&self.selected {
             panel=panel.child(div().px(px(14.)).py(px(8.)).text_size(px(11.5)).text_color(rgb(DIM)).truncate().child(id.clone()));
@@ -199,6 +212,7 @@ impl Render for Studio {
             .on_action(cx.listener(|this,_:&CloseOverlay,w,cx|{if this.terminal_drag.take().is_some()||this.panes.cancel(){cx.notify();}else{this.close_overlay(w,cx);}}))
             .child(resize_events)
             .child(titlebar)
+            .child(self.action_bar(cx))
             .child(div().relative().flex_1().min_h(px(0.)).flex().overflow_hidden()
                 .child(div().w(px(self.panes.workspace)).h_full().flex_none().child(sidebar))
                 .child(self.pane_handle(crate::panes::Divider::Workspace,"workspace-divider",cx))

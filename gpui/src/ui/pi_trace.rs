@@ -1,4 +1,4 @@
-use super::{controls::*, theme::rgb, theme::*};
+use super::{controls::*, icons::Icon, theme::rgb, theme::*};
 use gpui::*;
 use serde_json::Value;
 use std::{
@@ -261,6 +261,17 @@ fn relative(root: &Path, cwd: &str, path: &str) -> Option<String> {
 }
 impl Render for PiTraceView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status_color = if self.status.starts_with("Could not") {
+            0xdc8c95
+        } else if !self.active() {
+            MUTED
+        } else if self.status.starts_with("Waiting") || self.status.starts_with("Pi exited") {
+            WARNING
+        } else if self.status == "Pi running" {
+            ACCENT
+        } else {
+            GREEN
+        };
         let mut rows = div()
             .id("pi-observed-calls")
             .flex_1()
@@ -307,12 +318,17 @@ impl Render for PiTraceView {
                 bar()
                     .h(px(32.))
                     .child(
-                        button(
+                        icon_button(
                             "pi-trace-expand",
                             if self.expanded {
-                                "▾ Pi Trace"
+                                Icon::ChevronDown
                             } else {
-                                "▸ Pi Trace"
+                                Icon::ChevronRight
+                            },
+                            if self.expanded {
+                                "Collapse Pi Trace"
+                            } else {
+                                "Expand Pi Trace"
                             },
                             self.expanded,
                             true,
@@ -322,12 +338,14 @@ impl Render for PiTraceView {
                             cx.notify();
                         })),
                     )
+                    .child(caption("Pi Trace"))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.))
                             .truncate()
                             .text_size(px(11.))
+                            .text_color(rgb(status_color))
                             .child(self.status.clone()),
                     )
                     .child(caption(format!("{} tokens", self.tokens)))
