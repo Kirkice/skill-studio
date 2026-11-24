@@ -123,8 +123,16 @@ impl Render for FlowCanvas{
    if let Some((source,line))=&card.evidence{let source=source.clone();let line=*line;let evidence_id=card.id.clone();
     footer=footer.child(icon_button(("flow-evidence",i),Icon::Link,format!("Open call site · {source} · line {line}"),false,true).w(px((24.*z).max(20.))).h(px((22.*z).max(18.))).on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(evidence_id.clone());cx.notify();this.source(source.clone(),line,w,cx);} )));
    }
+   let mut background=rgb(if selected{RAISED}else{BG});
+   if let Some(state)=runtime{
+    let tint=gpui::rgb(runtime_color(state));
+    let strength=if state==running{0.22+pulse*0.16}else{0.22};
+    background.r+=(tint.r-background.r)*strength;
+    background.g+=(tint.g-background.g)*strength;
+    background.b+=(tint.b-background.b)*strength;
+   }
    let mut card_view=div().id(SharedString::from(format!("flow-card:{}",card.id))).absolute().left(camera.x+px(card.x*z)).top(camera.y+px(card.y*z))
-    .w(px(CARD_W*z)).h(px(card.h*z)).bg(rgb(if selected{RAISED}else{BG})).rounded(px(9.)).border_color(rgb(border)).overflow_hidden().flex().flex_col().cursor_pointer().shadow_md();
+    .w(px(CARD_W*z)).h(px(card.h*z)).bg(background).rounded(px(9.)).border_color(rgb(border)).overflow_hidden().flex().flex_col().cursor_pointer().shadow_md();
    card_view=if selected||runtime.is_some(){card_view.border_2()}else{card_view.border_1()};
    card_view=card_view
     .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.)+if runtime==Some(running){pulse*4.}else{0.})).rounded(px(2.)).bg(rgb(runtime.map(runtime_color).unwrap_or(color))))
