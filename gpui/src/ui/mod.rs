@@ -21,30 +21,63 @@ use gpui_base::{Editor, InputBase};
 impl Studio {
     const ACTIVITY_WIDTH: f32 = 50.;
 
+    fn pane_width(&self,window:&Window)->f32{
+        f32::from(window.viewport_size().width)-Self::ACTIVITY_WIDTH
+            +if self.explorer_visible{0.}else{self.panes.workspace+crate::panes::Panes::HANDLE}
+    }
+
     fn activity_rail(&self,cx:&mut Context<Self>)->Div {
         let debug=self.pi_trace.read(cx).active();
         let enabled=self.graph.is_some()||debug;
-        let debug_hint=if debug{"Stop Debug"}else{"Start Debug"};
+        let stop_debug=debug&&self.terminal_visible&&self.pi_trace_visible;
+        let debug_hint=if stop_debug{"Stop Debug"}else if debug{"Return to Debug terminal"}else{"Start Debug"};
         div().w(px(Self::ACTIVITY_WIDTH)).h_full().flex_none().flex().flex_col().items_center().gap(px(6.)).pt(px(8.)).bg(rgb(PANEL)).border_r_1().border_color(rgb(BORDER))
+            .child(sized_icon_button("activity-explorer",Icon::Explorer,if self.explorer_visible{"Collapse Explorer"}else{"Show Explorer"},self.explorer_visible,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|{
+                if !this.composition_ready(w,cx){return;}
+                this.explorer_visible=!this.explorer_visible;this.explorer_menu=None;this.panes.cancel();this.focus_handle.focus(w,cx);cx.notify();
+            })))
             .child(sized_icon_button("activity-open",Icon::FolderOpen,"Open workspace",false,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.open(w,cx))))
             .child(button("activity-debug","",debug,enabled).size(px(38.)).px(px(0.)).aria_label(debug_hint)
-                .child(icon(if debug{Icon::Stop}else{Icon::Play}).size(px(24.)).text_color(rgb(if debug{0xdc8c95}else if enabled{GREEN}else{DIM})))
+                .child(icon(if stop_debug{Icon::Stop}else if debug{Icon::Terminal}else{Icon::Play}).size(px(24.)).text_color(rgb(if stop_debug{0xdc8c95}else if debug{GREEN}else if enabled{MUTED}else{DIM})))
                 .tooltip(move|_,cx|cx.new(|_|Hint(debug_hint.into())).into())
                 .on_click(cx.listener(|this,_,w,cx|{
-                    if this.pi_trace.read(cx).active(){this.pi_trace.update(cx,|trace,cx|trace.stop(cx));}
+                    if this.pi_trace.read(cx).active(){
+                        if this.terminal_visible&&this.pi_trace_visible{this.pi_trace.update(cx,|trace,cx|trace.stop(cx));}
+                        else{this.show_terminal(w,cx);}
+                    }
                     else if this.graph.is_some(){this.start_pi_debug(w,cx);}
                 })))
             .child(sized_icon_button("activity-problems",Icon::BrokenLink,"Show / hide Problems",self.problems_visible,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.toggle_problems(w,cx))))
-            .child(sized_icon_button("activity-terminal",Icon::Terminal,"Show / hide Terminal",self.terminal_visible,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
+            .child(button("activity-terminal","",self.terminal_visible,true).size(px(38.)).px(px(0.)).aria_label("Show / hide Terminal")
+                .child(icon(Icon::Terminal).size(px(24.)).text_color(rgb(if !self.terminal.read(cx).active(){MUTED}else if self.terminal_visible{GREEN}else{0x4ea1ff})))
+                .tooltip(|_,cx|cx.new(|_|Hint("Show / hide Terminal".into())).into())
+                .on_click(cx.listener(|this,_,w,cx|this.toggle_terminal(w,cx))))
             .child(div().flex_1())
             .child(sized_icon_button("activity-command",Icon::Command,"Command palette · Ctrl/Cmd+Shift+P",self.palette,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.toggle_palette(w,cx))))
             .child(sized_icon_button("activity-settings",Icon::Settings,"Settings",self.settings_open,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.open_settings(w,cx))))
             .child(div().h(px(2.)).flex_none())
     }
 
-    fn terminal_with_trace(&self,cx:&App)->Div {
+    fn dock_panel(&self,content:Div,bottom:Option<Div>,problems:bool,cx:&mut Context<Self>)->Div{
+        let height=if problems{self.problems_height}else{self.terminal_height};
+        let mut panel=div().relative().size_full().flex().flex_col().overflow_hidden()
+            .child(div().flex_1().min_h(px(0.)).child(content));
+        if let Some(bottom)=bottom{
+            panel=panel.child(div().id(if problems{"problems-divider"}else{"bottom-panel-divider"}).h(px(6.)).w_full().flex_none().cursor_row_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))
+                .on_mouse_down(MouseButton::Left,cx.listener(move|this,e:&MouseDownEvent,w,cx|{
+                    if !this.composition_ready(w,cx){return;}
+                    this.terminal_drag=Some(crate::terminal::DockDrag{problems,origin:f32::from(e.position.y),height,draft:height});
+                    this.focus_handle.focus(w,cx);cx.stop_propagation();cx.notify();
+                })))
+                .child(div().h(px(height)).w_full().flex_none().child(bottom))
+                .children(self.terminal_drag.as_ref().filter(|d|d.problems==problems).map(|d|div().absolute().bottom(px(d.draft+2.)).left(px(0.)).right(px(0.)).h(px(2.)).bg(rgb(ACCENT))));
+        }
+        panel
+    }
+
+    fn terminal_with_trace(&self)->Div {
         div().size_full().flex().flex_col().child(div().flex_1().min_h(px(0.)).child(self.terminal.clone()))
-            .children(self.pi_trace_visible.then(||div().h(px(if self.pi_trace.read(cx).expanded {112.}else{32.})).flex_none().child(self.pi_trace.clone())))
+            .children(self.pi_trace_visible.then(||div().h(px(32.)).flex_none().child(self.pi_trace.clone())))
     }
     fn document_panel(&self,cx:&mut Context<Self>)->Div {
         let dirty=self.dirty(cx);
@@ -103,7 +136,11 @@ impl Studio {
                         .child(icon_button("replace-all",Icon::ReplaceAll,"Replace all matches",false,true).on_click(cx.listener(|this,_,w,cx|{let replacement=this.replace_query.read(cx).value().to_string();let count=this.editor.update(cx,|s,cx|s.replace_all_search_matches(&replacement,w,cx));this.status=format!("Replaced {count} matches (not saved)");cx.notify();}))))
                     .capture_key_down(cx.listener(|this,event:&KeyDownEvent,_,cx|{if event.keystroke.key=="enter"{this.editor.update(cx,|s,cx|s.next_search_match(cx));cx.stop_propagation();}})));
             }
-            if preview{panel=panel.child(self.markdown_preview(cx));}else{
+            if preview{
+                panel=panel.child(div().px(px(10.)).flex().items_center().gap(px(8.)).child(caption("Markdown preview · read only"))
+                    .child(icon_label("edit-markdown-source",Icon::Code,"Edit source",false,true).on_click(cx.listener(|this,_,w,cx|this.toggle_preview(w,cx)))))
+                    .child(self.markdown_preview(cx));
+            }else{
             let editor=self.editor.clone();
             panel=panel.child(InputBase::new("source-editor").flex_1().min_h(px(0.)).w_full().overflow_hidden().bg(rgb(BG)).font_family(MONO_FONT).text_size(px(self.preferences.font_size as f32)).line_height(px(self.preferences.font_size as f32*1.65))
                 .on_mouse_down(MouseButton::Left,move|_,w,cx|editor.update(cx,|s,cx|s.focus(w,cx))).child(div().size_full().child(Editor::new(&self.editor))));
@@ -175,8 +212,8 @@ impl Studio {
 
 impl Render for Studio {
     fn render(&mut self,window:&mut Window,cx:&mut Context<Self>)->impl IntoElement {
-        let width=f32::from(window.viewport_size().width)-Self::ACTIVITY_WIDTH;self.panes.fit(width);
-        let guide=self.panes.guide(width);
+        let width=self.pane_width(window);self.panes.fit(width);
+        let guide=self.panes.guide(self.pane_width(window)).map(|x|if self.explorer_visible{x}else{x-self.panes.workspace-crate::panes::Panes::HANDLE});
         let query=self.search.read(cx).value().to_string();
         let visible=self.graph.as_ref().map(|g|filter::visible(g,self.scope,if self.focus{self.selected.as_deref()}else{None},&query,self.show_missing)).unwrap_or_default();
         self.explorer.sync(self.graph_revision,self.graph.as_ref());
@@ -186,24 +223,19 @@ impl Render for Studio {
         let available=(f32::from(window.viewport_size().height)-70.).max(300.);
         self.terminal_height=crate::terminal::dock_height(self.terminal_height,available);
         let document=if self.terminal_visible&&self.terminal_maximized{
-            self.terminal_with_trace(cx)
+            self.terminal_with_trace()
         }else{
             let editor=self.document_panel(cx);
-            let bottom_visible=self.terminal_visible||self.problems_visible||self.pi_trace_visible;
-            let mut document=div().relative().size_full().flex().flex_col().overflow_hidden().child(div().flex_1().min_h(px(0.)).child(editor));
-            if bottom_visible{
-                let bottom=if self.problems_visible{self.problems_panel(cx)}else{self.terminal_with_trace(cx)};
-                document=document.child(div().id("bottom-panel-divider").h(px(6.)).w_full().flex_none().cursor_row_resize().bg(rgb(BORDER)).hover(|s|s.bg(rgb(ACCENT)))
-                    .on_mouse_down(MouseButton::Left,cx.listener(|this,e:&MouseDownEvent,w,cx|{if !this.composition_ready(w,cx){return;}this.terminal_drag=Some(crate::terminal::DockDrag{origin:f32::from(e.position.y),height:this.terminal_height,draft:this.terminal_height});this.focus_handle.focus(w,cx);cx.stop_propagation();cx.notify();})))
-                    .child(div().h(px(self.terminal_height)).w_full().flex_none().child(bottom))
-                    .children(self.terminal_drag.as_ref().map(|d|div().absolute().bottom(px(d.draft+2.)).left(px(0.)).right(px(0.)).h(px(2.)).bg(rgb(ACCENT))));
-            }document
+            self.dock_panel(editor,self.terminal_visible.then(||self.terminal_with_trace()),false,cx)
         };
+        self.problems_height=crate::terminal::dock_height(self.problems_height,available);
+        let problems=self.problems_visible.then(||self.problems_panel(cx));
+        let graph=self.dock_panel(graph,problems,true,cx);
         let overlay=self.overlays(window,cx);
         let explorer_menu=self.explorer_context_menu(window,cx);
-        let root=self.graph.as_ref().map(|g|g.root.clone()).unwrap_or_else(||"No workspace open".into());
+        let root:Option<SharedString>=self.graph.as_ref().map(|g|crate::files::shell_display_path(std::path::Path::new(&g.root)).into());
         let status=if self.panes.dragging(){"Resize preview · release to apply · Esc to cancel".into()}else{self.status.clone()};
-        let titlebar=self.titlebar(root,window,cx);
+        let titlebar=self.titlebar(window,cx);
         let resize_events=chrome::resize_events(cx.entity().downgrade());
         div().id("studio-root").relative().size_full().flex().flex_col().bg(rgb(BG)).text_color(rgb(TEXT)).text_size(px(UI_SIZE)).line_height(px(20.)).font_family(UI_FONT)
             .track_focus(&self.focus_handle)
@@ -221,8 +253,8 @@ impl Render for Studio {
             .child(titlebar)
             .child(div().relative().flex_1().min_h(px(0.)).flex().overflow_hidden()
                 .child(self.activity_rail(cx))
-                .child(div().w(px(self.panes.workspace)).h_full().flex_none().child(sidebar))
-                .child(self.pane_handle(crate::panes::Divider::Workspace,"workspace-divider",cx))
+                .children(self.explorer_visible.then(||div().w(px(self.panes.workspace)).h_full().flex_none().child(sidebar)))
+                .children(self.explorer_visible.then(||self.pane_handle(crate::panes::Divider::Workspace,"workspace-divider",cx)))
                 .child(div().flex_1().min_w(px(150.)).h_full().child(graph))
                 .child(self.pane_handle(crate::panes::Divider::Editor,"editor-divider",cx))
                 .child(div().w(px(self.panes.editor)).h_full().flex_none().child(document))
@@ -230,6 +262,8 @@ impl Render for Studio {
             .child(div().h(px(26.)).flex_none().px(px(12.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().gap(px(8.)).bg(rgb(PANEL))
                 .child(div().w(px(5.)).h(px(5.)).rounded_full().bg(rgb(if self.conflict{WARNING}else{GREEN})))
                 .child(div().flex_1().truncate().text_size(px(11.5)).text_color(rgb(MUTED)).child(status))
+                .children(root.map(|path|div().id("status-workspace-path").max_w(relative(0.45)).min_w(px(0.)).truncate().text_size(px(11.5)).text_color(rgb(DIM)).child(path.clone())
+                    .tooltip(move|_,cx|cx.new(|_|Hint(path.clone())).into())))
                 .child(caption(if self.watcher.is_some(){"Live index · Local first"}else{"Local first · Explicit terminal"})))
             .children(self.dragging_external.then(||div().id("external-drop-target").absolute().inset_0().occlude()
                 .on_drop(cx.listener(|this,paths:&ExternalPaths,w,cx|{cx.stop_propagation();this.open_external(paths.paths().to_vec(),w,cx);}))

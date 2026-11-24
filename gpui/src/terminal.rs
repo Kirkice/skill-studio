@@ -2,7 +2,7 @@
 use portable_pty::{CommandBuilder,PtySize,ChildKiller};
 use std::{io::{Read,Write},path::{Path,PathBuf},sync::{Arc,Mutex,atomic::{AtomicBool,Ordering},mpsc},time::Duration};
 
-pub struct DockDrag{pub origin:f32,pub height:f32,pub draft:f32}
+pub struct DockDrag{pub problems:bool,pub origin:f32,pub height:f32,pub draft:f32}
 pub fn dock_height(height:f32,available:f32)->f32{height.clamp(120.,(available-180.).max(120.))}
 
 pub enum Event{Data(Vec<u8>),Exit(String),Error(String)}

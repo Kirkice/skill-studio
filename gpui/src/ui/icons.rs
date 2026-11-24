@@ -4,11 +4,11 @@ use std::borrow::Cow;
 
 // Original 24px outline assets, embedded in the binary (no filesystem or font dependency).
 #[derive(Clone, Copy)]
-pub enum Icon { FolderOpen, Plus, Command, Refresh, Save, More, Focus, BrokenLink, Layout, Minus, ZoomIn, ZoomOut, File, Code, Skill, Search, ChevronDown, Close, Import, Export, Undo, Check, Graph, Layers, ArrowRight, Branch, Settings, Wrap, Numbers, Eye, Link, ArrowLeft, ResetZoom, Replace, ReplaceAll, ToggleOn, ToggleOff, Maximize, Restore, ChevronRight, Folder, CollapseAll, Image, Terminal, Copy, Paste, Stop, Mouse, Play }
+pub enum Icon { FolderOpen, Plus, Command, Refresh, Save, More, Focus, BrokenLink, Layout, Minus, ZoomIn, ZoomOut, File, Code, Skill, Search, ChevronDown, Close, Import, Export, Undo, Check, Graph, Layers, ArrowRight, Branch, Settings, Wrap, Numbers, Eye, Link, ArrowLeft, ResetZoom, Replace, ReplaceAll, ToggleOn, ToggleOff, Maximize, Restore, ChevronRight, Folder, CollapseAll, Image, Terminal, Copy, Paste, Stop, Mouse, Play, Explorer, ExternalWindow }
 impl Icon {
-    pub const ALL: &[Self] = &[Self::FolderOpen,Self::Plus,Self::Command,Self::Refresh,Self::Save,Self::More,Self::Focus,Self::BrokenLink,Self::Layout,Self::Minus,Self::ZoomIn,Self::ZoomOut,Self::File,Self::Code,Self::Skill,Self::Search,Self::ChevronDown,Self::Close,Self::Import,Self::Export,Self::Undo,Self::Check,Self::Graph,Self::Layers,Self::ArrowRight,Self::Branch,Self::Settings,Self::Wrap,Self::Numbers,Self::Eye,Self::Link,Self::ArrowLeft,Self::ResetZoom,Self::Replace,Self::ReplaceAll,Self::ToggleOn,Self::ToggleOff,Self::Maximize,Self::Restore,Self::ChevronRight,Self::Folder,Self::CollapseAll,Self::Image,Self::Terminal,Self::Copy,Self::Paste,Self::Stop,Self::Mouse,Self::Play];
+    pub const ALL: &[Self] = &[Self::FolderOpen,Self::Plus,Self::Command,Self::Refresh,Self::Save,Self::More,Self::Focus,Self::BrokenLink,Self::Layout,Self::Minus,Self::ZoomIn,Self::ZoomOut,Self::File,Self::Code,Self::Skill,Self::Search,Self::ChevronDown,Self::Close,Self::Import,Self::Export,Self::Undo,Self::Check,Self::Graph,Self::Layers,Self::ArrowRight,Self::Branch,Self::Settings,Self::Wrap,Self::Numbers,Self::Eye,Self::Link,Self::ArrowLeft,Self::ResetZoom,Self::Replace,Self::ReplaceAll,Self::ToggleOn,Self::ToggleOff,Self::Maximize,Self::Restore,Self::ChevronRight,Self::Folder,Self::CollapseAll,Self::Image,Self::Terminal,Self::Copy,Self::Paste,Self::Stop,Self::Mouse,Self::Play,Self::Explorer,Self::ExternalWindow];
     fn name(self)-> &'static str { match self {
-        Self::FolderOpen=>"folder-open",Self::Plus=>"plus",Self::Command=>"command",Self::Refresh=>"refresh",Self::Save=>"save",Self::More=>"more",Self::Focus=>"focus",Self::BrokenLink=>"broken-link",Self::Layout=>"layout",Self::Minus=>"minus",Self::ZoomIn=>"zoom-in",Self::ZoomOut=>"zoom-out",Self::File=>"file",Self::Code=>"code",Self::Skill=>"skill",Self::Search=>"search",Self::ChevronDown=>"chevron-down",Self::Close=>"close",Self::Import=>"import",Self::Export=>"export",Self::Undo=>"undo",Self::Check=>"check",Self::Graph=>"graph",Self::Layers=>"layers",Self::ArrowRight=>"arrow-right",Self::Branch=>"branch",Self::Settings=>"settings",Self::Wrap=>"wrap",Self::Numbers=>"numbers",Self::Eye=>"eye",Self::Link=>"link",Self::ArrowLeft=>"arrow-left",Self::ResetZoom=>"reset-zoom",Self::Replace=>"replace",Self::ReplaceAll=>"replace-all",Self::ToggleOn=>"toggle-on",Self::ToggleOff=>"toggle-off",Self::Maximize=>"maximize",Self::Restore=>"restore",Self::ChevronRight=>"chevron-right",Self::Folder=>"folder",Self::CollapseAll=>"collapse-all",Self::Image=>"image",Self::Terminal=>"terminal",Self::Copy=>"copy",Self::Paste=>"paste",Self::Stop=>"stop",Self::Mouse=>"mouse",Self::Play=>"play"
+        Self::FolderOpen=>"folder-open",Self::Plus=>"plus",Self::Command=>"command",Self::Refresh=>"refresh",Self::Save=>"save",Self::More=>"more",Self::Focus=>"focus",Self::BrokenLink=>"broken-link",Self::Layout=>"layout",Self::Minus=>"minus",Self::ZoomIn=>"zoom-in",Self::ZoomOut=>"zoom-out",Self::File=>"file",Self::Code=>"code",Self::Skill=>"skill",Self::Search=>"search",Self::ChevronDown=>"chevron-down",Self::Close=>"close",Self::Import=>"import",Self::Export=>"export",Self::Undo=>"undo",Self::Check=>"check",Self::Graph=>"graph",Self::Layers=>"layers",Self::ArrowRight=>"arrow-right",Self::Branch=>"branch",Self::Settings=>"settings",Self::Wrap=>"wrap",Self::Numbers=>"numbers",Self::Eye=>"eye",Self::Link=>"link",Self::ArrowLeft=>"arrow-left",Self::ResetZoom=>"reset-zoom",Self::Replace=>"replace",Self::ReplaceAll=>"replace-all",Self::ToggleOn=>"toggle-on",Self::ToggleOff=>"toggle-off",Self::Maximize=>"maximize",Self::Restore=>"restore",Self::ChevronRight=>"chevron-right",Self::Folder=>"folder",Self::CollapseAll=>"collapse-all",Self::Image=>"image",Self::Terminal=>"terminal",Self::Copy=>"copy",Self::Paste=>"paste",Self::Stop=>"stop",Self::Mouse=>"mouse",Self::Play=>"play",Self::Explorer=>"explorer",Self::ExternalWindow=>"external-window"
     }}
     fn paths(self)-> &'static str { match self {
         Self::FolderOpen=>"M3 7V5h6l2 2h10v4 M3 8v12h16l3-9H7l-4 9",
@@ -37,7 +37,8 @@ impl Icon {
         Self::Layers=>"M12 3l10 5-10 5L2 8z M2 12l10 5 10-5 M2 16l10 5 10-5",
         Self::ArrowRight=>"M4 12h16 M14 6l6 6-6 6",
         Self::Branch=>"M6 3v18 M6 12h7a5 5 0 0 0 5-5V3 M3 3h6 M3 21h6 M15 3h6",
-        Self::Settings=>"M4 7h16 M4 17h16 M8 4v6 M16 14v6",
+        Self::Settings=>"M10 3h4l.6 2.6 2 .9 2.4-1 2 3.5-2 1.7v2.6l2 1.7-2 3.5-2.4-1-2 .9L14 21h-4l-.6-2.6-2-.9-2.4 1-2-3.5 2-1.7v-2.6L3 9l2-3.5 2.4 1 2-.9z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
+        Self::Explorer=>"M8 3h7l4 4v11H8z M15 3v5h4 M5 7v14h11",
         Self::Wrap=>"M3 5h18 M3 10h14a4 4 0 0 1 0 8h-5 M15 15l-3 3 3 3 M3 15h4",
         Self::Numbers=>"M3 4h1v5 M3 13h3l-3 5h3 M10 6h11 M10 12h11 M10 18h11",
         Self::Eye=>"M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z M15 12a3 3 0 1 0-6 0 3 3 0 1 0 6 0",
@@ -48,7 +49,8 @@ impl Icon {
         Self::ReplaceAll=>"M3 3h6v6H3z M15 3h6v6h-6z M3 15h6v6H3z M14 17h7 M18 14l3 3-3 3",
         Self::ToggleOn=>"M8 5h8a7 7 0 0 1 0 14H8A7 7 0 0 1 8 5z M19 12a3 3 0 1 0-6 0 3 3 0 1 0 6 0",
         Self::ToggleOff=>"M8 5h8a7 7 0 0 1 0 14H8A7 7 0 0 1 8 5z M11 12a3 3 0 1 0-6 0 3 3 0 1 0 6 0",
-        Self::Maximize=>"M4 4h16v16H4z",
+        Self::Maximize=>"M9 4H4v5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5",
+        Self::ExternalWindow=>"M13 5H5v14h14v-8 M14 4h6v6 M20 4l-9 9",
         Self::Restore=>"M8 8h12v12H8z M4 16V4h12",
         Self::ChevronRight=>"M9 6l6 6-6 6",
         Self::Folder=>"M3 5h6l2 2h10v13H3z",

@@ -14,7 +14,7 @@ pub(super) fn resize_events(owner:WeakEntity<Studio>)->impl IntoElement{
                     drag.draft=crate::terminal::dock_height(drag.height-(f32::from(event.position.y)-drag.origin),f32::from(window.viewport_size().height)-70.);cx.notify();return true;
                 }
                 if !this.panes.dragging(){return false;}
-                if this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width)-Studio::ACTIVITY_WIDTH){cx.notify();}true
+                let width=this.pane_width(window);if this.panes.update(f32::from(event.position.x),width){cx.notify();}true
             }).unwrap_or(false);
             if handled{window.prevent_default();cx.stop_propagation();}
         });
@@ -22,9 +22,9 @@ pub(super) fn resize_events(owner:WeakEntity<Studio>)->impl IntoElement{
         window.on_mouse_event(move|event:&MouseUpEvent,phase,window,cx|{
             if phase!=DispatchPhase::Capture||event.button!=MouseButton::Left{return;}
             let handled=released.update(cx,|this,cx|{
-                if let Some(drag)=this.terminal_drag.take(){this.terminal_height=drag.draft;cx.notify();return true;}
+                if let Some(drag)=this.terminal_drag.take(){if drag.problems{this.problems_height=drag.draft;}else{this.terminal_height=drag.draft;}cx.notify();return true;}
                 if !this.panes.dragging(){return false;}
-                this.panes.update(f32::from(event.position.x),f32::from(window.viewport_size().width)-Studio::ACTIVITY_WIDTH);
+                let width=this.pane_width(window);this.panes.update(f32::from(event.position.x),width);
                 this.panes.commit();cx.notify();true
             }).unwrap_or(false);
             if handled{window.prevent_default();cx.stop_propagation();}
@@ -46,10 +46,10 @@ fn toggle_maximize(window:&Window){
 }
 
 impl Studio {
-    pub(super) fn titlebar(&self,root:String,window:&Window,cx:&mut Context<Self>)->Div{
+    pub(super) fn titlebar(&self,window:&Window,cx:&mut Context<Self>)->Div{
         let drag=div().id("window-drag").flex_1().min_w(px(0.)).h_full().flex().items_center().gap(px(10.)).window_control_area(WindowControlArea::Drag)
             .child(app_logo().size(px(26.))).child(div().font_weight(FontWeight::SEMIBOLD).child("skill studio"))
-            .child(separator()).child(div().flex_1().min_w(px(0.)).truncate().text_color(rgb(DIM)).text_size(px(12.)).child(root))
+            .child(div().flex_1().min_w(px(0.)))
             .on_mouse_down(MouseButton::Left,|_,_window,_|{
                 #[cfg(not(target_os="windows"))] _window.start_window_move();
             })

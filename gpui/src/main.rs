@@ -22,7 +22,7 @@ use gpui::*;
 use gpui_base::input::{EditorState, InputState, InputEvent};
 actions!(studio, [TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview, ToggleTerminal]);
 
-struct Studio { terminal:Entity<ui::terminal::TerminalView>,pi_trace:Entity<ui::pi_trace::PiTraceView>,terminal_visible:bool,problems_visible:bool,pi_trace_visible:bool,diagnostics:Vec<diagnostics::Diagnostic>,terminal_maximized:bool,terminal_height:f32,terminal_drag:Option<terminal::DockDrag>,closing_pending:bool, explorer_menu:Option<explorer::ContextMenu>, open_ticket:u64, workspace_file:Option<String>, dragging_external:bool, explorer:explorer::Explorer, panes:panes::Panes, flow_canvas:Option<Entity<ui::graph::flow::FlowCanvas>>, flow_mode:bool, documents:documents::Documents<Entity<EditorState>>, graph_canvas: Option<Entity<ui::graph::GraphCanvas>>, graph_revision: u64, saving: bool, refreshing: bool, refresh_pending: bool, find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, zoom: f32, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
+struct Studio { terminal:Entity<ui::terminal::TerminalView>,pi_trace:Entity<ui::pi_trace::PiTraceView>,terminal_visible:bool,problems_visible:bool,pi_trace_visible:bool,diagnostics:Vec<diagnostics::Diagnostic>,terminal_maximized:bool,terminal_height:f32,problems_height:f32,terminal_drag:Option<terminal::DockDrag>,closing_pending:bool, explorer_visible:bool, explorer_menu:Option<explorer::ContextMenu>, open_ticket:u64, workspace_file:Option<String>, dragging_external:bool, explorer:explorer::Explorer, panes:panes::Panes, flow_canvas:Option<Entity<ui::graph::flow::FlowCanvas>>, flow_mode:bool, documents:documents::Documents<Entity<EditorState>>, graph_canvas: Option<Entity<ui::graph::GraphCanvas>>, graph_revision: u64, saving: bool, refreshing: bool, refresh_pending: bool, find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, zoom: f32, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
 impl Studio {
     fn toggle_terminal(&mut self,window:&mut Window,cx:&mut Context<Self>){
         if !self.composition_ready(window,cx){return;}
@@ -30,12 +30,13 @@ impl Studio {
     }
     fn show_terminal(&mut self,window:&mut Window,cx:&mut Context<Self>){
         if !self.composition_ready(window,cx){return;}
-        self.problems_visible=false;self.pi_trace_visible=false;self.terminal_visible=true;
+        self.pi_trace_visible=self.pi_trace.read(cx).active();self.terminal_visible=true;
         let cwd=self.graph.as_ref().map(|g|std::path::PathBuf::from(&g.root)).or_else(dirs::home_dir).unwrap_or_else(||std::path::PathBuf::from("."));
         self.terminal.update(cx,|t,cx|{t.invalidate(self.preferences.terminal_font_size,self.preferences.terminal_line_height,cx);t.start(cwd,window,cx);});cx.notify();
     }
-    fn toggle_problems(&mut self,window:&mut Window,cx:&mut Context<Self>){
-        if self.problems_visible { self.hide_bottom_panel(window,cx); } else { self.terminal_visible=false;self.pi_trace_visible=false;self.terminal_maximized=false;self.problems_visible=true;self.run_checks(cx); }
+    fn toggle_problems(&mut self,_window:&mut Window,cx:&mut Context<Self>){
+        self.problems_visible=!self.problems_visible;
+        if self.problems_visible{self.run_checks(cx);}else{if self.terminal_drag.as_ref().is_some_and(|d|d.problems){self.terminal_drag=None;}cx.notify();}
     }
     fn start_pi_debug(&mut self,window:&mut Window,cx:&mut Context<Self>){
         let Some(cwd)=self.graph.as_ref().map(|g|std::path::PathBuf::from(&g.root)) else{return;};
@@ -46,7 +47,7 @@ impl Studio {
         self.pi_trace.update(cx,|trace,cx|{trace.start(cwd,&self.preferences.pi_launcher,cx);if !active{trace.copy_command(cx);}});cx.notify();
     }
     fn hide_bottom_panel(&mut self,window:&mut Window,cx:&mut Context<Self>){
-        self.terminal_visible=false;self.problems_visible=false;self.pi_trace_visible=false;self.terminal_drag=None;self.terminal.update(cx,|t,cx|t.dismiss_menu(cx));
+        self.terminal_visible=false;self.pi_trace_visible=false;if self.terminal_drag.as_ref().is_some_and(|d|!d.problems){self.terminal_drag=None;}self.terminal.update(cx,|t,cx|t.dismiss_menu(cx));
         if self.active_text(){self.editor.update(cx,|e,cx|e.focus(window,cx));}else{self.focus_handle.focus(window,cx);}cx.notify();
     }
     fn run_checks(&mut self,cx:&mut Context<Self>){
@@ -54,16 +55,48 @@ impl Studio {
         let (errors,warnings,info)=diagnostics::counts(&self.diagnostics);self.status=format!("Checks complete · {errors} errors · {warnings} warnings · {info} info");cx.notify();
     }
     fn request_close(&mut self,window:&mut Window,cx:&mut Context<Self>)->bool{
-        if self.closing_pending||!self.guard(cx){return false;}
+        if self.closing_pending||self.saving{return false;}
+        let dirty:Vec<_>=self.documents.tabs.iter().filter(|t|t.dirty).map(|t|(t.id.clone(),t.token,t.editor.read(cx).value())).collect();
+        if !dirty.is_empty(){
+            self.closing_pending=true;
+            let answer=window.prompt(PromptLevel::Warning,"Unsaved changes",Some("Save modified documents before closing SkillRider?"),&[PromptButton::ok("Save All"),PromptButton::ok("Discard All"),PromptButton::cancel("Cancel")],cx);
+            cx.spawn_in(window,async move|this,cx|{
+                let choice=answer.await.ok();
+                if choice==Some(0){
+                    for (id,_,_) in &dirty{
+                        if this.update_in(cx,|this,w,cx|this.save_tab(id.clone(),false,w,cx)).is_err(){return;}
+                        loop{
+                            let state=this.update_in(cx,|this,_,_|(this.saving,this.documents.get(id).is_some_and(|t|t.dirty)));
+                            match state{
+                                Ok((true,_))=>cx.background_executor().timer(std::time::Duration::from_millis(30)).await,
+                                Ok((false,false))=>break,
+                                _=>{let _=this.update_in(cx,|this,_,cx|{this.closing_pending=false;cx.notify();});return;}
+                            }
+                        }
+                    }
+                }
+                let _=this.update_in(cx,|this,w,cx|{
+                    this.closing_pending=false;
+                    if choice==Some(1){
+                        let unchanged=this.documents.tabs.iter().filter(|t|t.dirty).all(|t|dirty.iter().any(|(id,token,value)|id==&t.id&&*token==t.token&&*value==t.editor.read(cx).value()));
+                        if !unchanged{this.status="Documents changed during confirmation; window kept open".into();cx.notify();return;}
+                        for (id,_,_) in &dirty{this.remove_tab(id,w,cx);}
+                    }
+                    if matches!(choice,Some(0|1))&&this.request_close(w,cx){w.remove_window();}
+                    cx.notify();
+                });
+            }).detach();
+            return false;
+        }
         let terminal_active=self.terminal.read(cx).active();let pi_active=self.pi_trace.read(cx).active();
-        if !terminal_active&&!pi_active{return true;}
+        if !terminal_active&&!pi_active{self.pi_trace.update(cx,|t,cx|t.close_details(cx));return true;}
         self.closing_pending=true;
         let title=if terminal_active&&pi_active{"Close window and stop terminal and Pi?"}else if pi_active{"Close window and stop Pi?"}else{"Close window and stop terminal?"};
         let answer=window.prompt(PromptLevel::Warning,title,Some("Active child processes will be terminated. Hiding the bottom panel instead keeps them running."),&[PromptButton::ok("Stop and close"),PromptButton::cancel("Cancel")],cx);
         cx.spawn_in(window,async move|this,cx|{
             if answer.await.ok()!=Some(0){let _=this.update_in(cx,|this,_,cx|{this.closing_pending=false;cx.notify();});return;}
             let stopped=this.update_in(cx,|this,_,cx|{if !this.guard(cx){this.closing_pending=false;return None;}this.pi_trace.update(cx,|t,cx|t.stop(cx));Some(this.terminal.update(cx,|t,cx|t.stop(cx)))});
-            if let Ok(Some(done))=stopped{if let Some(done)=done{let _=done.recv().await;}let _=this.update_in(cx,|this,w,cx|{this.closing_pending=false;if !this.terminal.read(cx).active()&&!this.pi_trace.read(cx).active()&&this.guard(cx){w.remove_window();}});}
+            if let Ok(Some(done))=stopped{if let Some(done)=done{let _=done.recv().await;}let _=this.update_in(cx,|this,w,cx|{this.closing_pending=false;if !this.terminal.read(cx).active()&&!this.pi_trace.read(cx).active()&&this.guard(cx){this.pi_trace.update(cx,|t,cx|t.close_details(cx));w.remove_window();}});}
         }).detach();false
     }
     fn active_text(&self)->bool{self.selected.as_ref().and_then(|id|self.documents.get(id)).is_some_and(|t|t.view.is_text())}
@@ -419,15 +452,18 @@ fn main() {
                 cx.subscribe(&search, |_: &mut Studio, _, event,cx| {if matches!(event,InputEvent::Change){cx.notify();}}).detach();
                 cx.observe(&pi_trace, |_: &mut Studio, _, cx| cx.notify()).detach();
                 let terminal=cx.new(|cx|ui::terminal::TerminalView::new(preferences.terminal_font_size,preferences.terminal_line_height,cx));
+                let mut was_active=false;
+                cx.observe(&terminal,move|_:&mut Studio,terminal,cx|{let active=terminal.read(cx).active();if active!=was_active{was_active=active;cx.notify();}}).detach();
                 cx.subscribe_in(&terminal,window,|this:&mut Studio,_,event:&ui::terminal::TerminalEvent,w,cx|{
                     match event{
                         ui::terminal::TerminalEvent::Hide=>this.hide_bottom_panel(w,cx),
+                        ui::terminal::TerminalEvent::Close=>{this.terminal_maximized=false;if this.pi_trace.read(cx).active(){this.pi_trace.update(cx,|trace,cx|trace.stop(cx));}this.hide_bottom_panel(w,cx);},
                         ui::terminal::TerminalEvent::Maximize(value)=>{this.terminal_maximized=*value;this.terminal_visible=true;this.terminal_drag=None;},
                         ui::terminal::TerminalEvent::FontSize(size)=>{this.preferences.terminal_font_size=*size;if let Err(e)=settings::save(&this.preferences){this.status=format!("Unable to save terminal preferences: {e}");}},
                         ui::terminal::TerminalEvent::LineHeight(height)=>{this.preferences.terminal_line_height=*height;if let Err(e)=settings::save(&this.preferences){this.status=format!("Unable to save terminal preferences: {e}");}},
                     }cx.notify();
                 }).detach();
-                Studio { terminal,pi_trace,terminal_visible:false,problems_visible:false,pi_trace_visible:false,diagnostics:vec![],terminal_maximized:false,terminal_height:320.,terminal_drag:None,closing_pending:false, explorer_menu:None, open_ticket:0, workspace_file:None, dragging_external:false, explorer:Default::default(), panes:Default::default(), flow_canvas:None, flow_mode:true, documents:Default::default(), graph_canvas: None, graph_revision: 0, saving: false, refreshing: false, refresh_pending: false, find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), zoom: 1., palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
+                Studio { terminal,pi_trace,terminal_visible:false,problems_visible:false,pi_trace_visible:false,diagnostics:vec![],terminal_maximized:false,terminal_height:320.,problems_height:220.,terminal_drag:None,closing_pending:false, explorer_visible:true, explorer_menu:None, open_ticket:0, workspace_file:None, dragging_external:false, explorer:Default::default(), panes:Default::default(), flow_canvas:None, flow_mode:true, documents:Default::default(), graph_canvas: None, graph_revision: 0, saving: false, refreshing: false, refresh_pending: false, find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), zoom: 1., palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
             });
             studio.read(cx).focus_handle.clone().focus(window, cx);
             if let Some(path)=&initial_workspace {

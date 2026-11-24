@@ -41,7 +41,7 @@ struct Call {
 }
 pub(crate) struct PiTraceView {
     bridge: Option<tempfile::TempDir>,
-    pub(super) expanded: bool,
+    details: Option<WindowHandle<TraceDetails>>,
     reader: Option<Task<()>>,
     command: String,
     status: String,
@@ -52,7 +52,7 @@ impl PiTraceView {
     pub fn new() -> Self {
         Self {
             bridge: None,
-            expanded: false,
+            details: None,
             reader: None,
             command: String::new(),
             status: "Debug off".into(),
@@ -259,19 +259,87 @@ fn relative(root: &Path, cwd: &str, path: &str) -> Option<String> {
     }
     (!parts.is_empty()).then(|| parts.join("/"))
 }
-impl Render for PiTraceView {
+struct TraceDetails {
+    trace: WeakEntity<PiTraceView>,
+    _observe: Subscription,
+}
+
+impl Render for TraceDetails {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let status_color = if self.status.starts_with("Could not") {
-            0xdc8c95
-        } else if !self.active() {
-            MUTED
-        } else if self.status.starts_with("Waiting") || self.status.starts_with("Pi exited") {
-            WARNING
-        } else if self.status == "Pi running" {
-            ACCENT
-        } else {
-            GREEN
+        let Some(trace) = self.trace.upgrade() else {
+            return div().size_full().child("Pi Trace is unavailable");
         };
+        let trace = trace.read(cx);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(BG))
+            .text_color(rgb(TEXT))
+            .font_family(UI_FONT)
+            .child(
+                bar()
+                    .bg(rgb(PANEL))
+                    .child(caption("Pi Trace"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .text_size(px(12.))
+                            .child(trace.status.clone()),
+                    )
+                    .child(caption(format!("{} tokens", trace.tokens))),
+            )
+            .child(trace.rows())
+    }
+}
+
+impl PiTraceView {
+    pub(crate) fn close_details(&mut self, cx: &mut App) {
+        if let Some(window) = self.details.take() {
+            let _ = window.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
+    fn show_details(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let Some(trace) = weak.upgrade() else {
+                return;
+            };
+            if let Some(window) = trace.read(cx).details {
+                if window
+                    .update(cx, |_, window, _| window.activate_window())
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(720.), px(440.)),
+                    cx,
+                ))),
+                window_min_size: Some(size(px(340.), px(220.))),
+                ..Default::default()
+            };
+            let observed = trace.clone();
+            let details = cx
+                .open_window(options, move |window, cx| {
+                    window.set_window_title("Pi Trace");
+                    cx.new(|cx| TraceDetails {
+                        trace: observed.downgrade(),
+                        _observe: cx.observe(&observed, |_, _, cx| cx.notify()),
+                    })
+                })
+                .ok();
+            trace.update(cx, |trace, _| trace.details = details);
+        });
+    }
+
+    fn rows(&self) -> Stateful<Div> {
         let mut rows = div()
             .id("pi-observed-calls")
             .flex_1()
@@ -305,6 +373,31 @@ impl Render for PiTraceView {
                     .children(call.ms.map(|ms| caption(format!("{ms:.0} ms")))),
             );
         }
+        if self.calls.is_empty() {
+            rows = rows.child(
+                div()
+                    .p(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child("No tool calls recorded yet."),
+            );
+        }
+        rows
+    }
+}
+
+impl Render for PiTraceView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status_color = if self.status.starts_with("Could not") {
+            0xdc8c95
+        } else if !self.active() {
+            MUTED
+        } else if self.status.starts_with("Waiting") || self.status.starts_with("Pi exited") {
+            WARNING
+        } else if self.status == "Pi running" {
+            ACCENT
+        } else {
+            GREEN
+        };
         div()
             .size_full()
             .min_h(px(0.))
@@ -315,45 +408,66 @@ impl Render for PiTraceView {
             .border_t_1()
             .border_color(rgb(BORDER))
             .child(
-                bar()
-                    .h(px(32.))
+                div()
+                    .size_full()
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
                     .child(
-                        icon_button(
-                            "pi-trace-expand",
-                            if self.expanded {
-                                Icon::ChevronDown
-                            } else {
-                                Icon::ChevronRight
-                            },
-                            if self.expanded {
-                                "Collapse Pi Trace"
-                            } else {
-                                "Expand Pi Trace"
-                            },
-                            self.expanded,
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.expanded = !this.expanded;
-                            cx.notify();
-                        })),
+                        icon_label("pi-trace-details", Icon::ExternalWindow, "Pi Trace", false, true)
+                            .h(px(24.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(RAISED))
+                            .tooltip(|_, cx| {
+                                cx.new(|_| Hint("Open Pi Trace details".into())).into()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.show_details(cx))),
                     )
-                    .child(caption("Pi Trace"))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .truncate()
-                            .text_size(px(11.))
-                            .text_color(rgb(status_color))
-                            .child(self.status.clone()),
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(
+                                div()
+                                    .size(px(6.))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(rgb(status_color)),
+                            )
+                            .child(
+                                div()
+                                    .id("pi-trace-status")
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(status_color))
+                                    .child(if self.status.starts_with("Waiting for Pi") {
+                                        "Waiting for Pi".to_string()
+                                    } else {
+                                        self.status.clone()
+                                    })
+                                    .tooltip({
+                                        let status: SharedString = self.status.clone().into();
+                                        move |_, cx| cx.new(|_| Hint(status.clone())).into()
+                                    }),
+                            ),
                     )
-                    .child(caption(format!("{} tokens", self.tokens)))
+                    .child(caption(format!("{} tokens", self.tokens)).flex_none())
                     .children(self.active().then(|| {
-                        button("pi-copy-attach", "Copy Pi command", false, true)
+                        icon_label("pi-copy-attach", Icon::Copy, "Copy", false, true)
+                            .h(px(24.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(RAISED))
+                            .aria_label("Copy Pi command")
+                            .tooltip(|_, cx| cx.new(|_| Hint("Copy Pi command".into())).into())
                             .on_click(cx.listener(|this, _, _, cx| this.copy_command(cx)))
                     })),
             )
-            .children(self.expanded.then_some(rows))
     }
 }

@@ -8,10 +8,10 @@ mod menu;
 use metrics::Metrics;
 use std::{cell::RefCell,rc::Rc,sync::Arc,path::PathBuf,ops::Range,time::Duration};
 
-actions!(terminal_keys,[CopyTerminal,PasteTerminal,ControlC,ControlD,ControlS,ControlW,ControlF,EscapeTerminal,CloseTerminal]);
-pub enum TerminalEvent{Hide,Maximize(bool),FontSize(u16),LineHeight(f32)}
+actions!(terminal_keys,[CopyTerminal,PasteTerminal,ControlC,ControlD,ControlS,ControlW,ControlF,EscapeTerminal,CloseTerminal,TerminalTab,TerminalBackTab]);
+pub enum TerminalEvent{Hide,Close,Maximize(bool),FontSize(u16),LineHeight(f32)}
 pub fn bind_keys(cx:&mut App){
-    let mut keys=vec![KeyBinding::new("ctrl-shift-c",CopyTerminal,Some("Terminal")),KeyBinding::new("ctrl-shift-v",PasteTerminal,Some("Terminal")),KeyBinding::new("ctrl-c",ControlC,Some("Terminal")),KeyBinding::new("ctrl-d",ControlD,Some("Terminal")),KeyBinding::new("ctrl-s",ControlS,Some("Terminal")),KeyBinding::new("ctrl-w",ControlW,Some("Terminal")),KeyBinding::new("ctrl-f",ControlF,Some("Terminal")),KeyBinding::new("escape",EscapeTerminal,Some("Terminal"))];
+    let mut keys=vec![KeyBinding::new("ctrl-shift-c",CopyTerminal,Some("Terminal")),KeyBinding::new("ctrl-shift-v",PasteTerminal,Some("Terminal")),KeyBinding::new("ctrl-c",ControlC,Some("Terminal")),KeyBinding::new("ctrl-d",ControlD,Some("Terminal")),KeyBinding::new("ctrl-s",ControlS,Some("Terminal")),KeyBinding::new("ctrl-w",ControlW,Some("Terminal")),KeyBinding::new("ctrl-f",ControlF,Some("Terminal")),KeyBinding::new("escape",EscapeTerminal,Some("Terminal")),KeyBinding::new("tab",TerminalTab,Some("Terminal")),KeyBinding::new("shift-tab",TerminalBackTab,Some("Terminal"))];
     if cfg!(target_os="macos"){keys.extend([KeyBinding::new("cmd-c",CopyTerminal,Some("Terminal")),KeyBinding::new("cmd-v",PasteTerminal,Some("Terminal")),KeyBinding::new("cmd-shift-v",PasteTerminal,Some("Terminal")),KeyBinding::new("cmd-w",CloseTerminal,Some("Terminal"))]);}
     else{keys.push(KeyBinding::new("ctrl-v",PasteTerminal,Some("Terminal")));}cx.bind_keys(keys);
 }
@@ -19,14 +19,20 @@ struct Run{col:u16,line:ShapedLine,width:Pixels,pad:Pixels}
 struct Row{cells:Vec<vt100::Cell>,runs:Vec<Run>,selection:Option<(u16,u16)>}
 struct Grid{
     parser:vt100::Parser<terminal::Replies>,session:Option<Arc<Session>>,bounds:Bounds<Pixels>,cell:Size<Pixels>,metrics:Metrics,line_height:f32,
-    rows:Vec<Row>,palette:TerminalPalette,wheel:terminal::ScrollAccumulator,history:usize,force_app_scroll:bool,scrollbar_grab:Option<(f32,usize)>,font_size:f32,marked:String,selection:Option<((u16,u16),(u16,u16))>,selecting:bool,
+    rows:Vec<Row>,palette:TerminalPalette,wheel:terminal::ScrollAccumulator,history:usize,force_app_scroll:bool,scrollbar_grab:Option<(f32,usize)>,font_size:f32,marked:String,selection:Option<((u16,u16),(u16,u16))>,selecting:bool,app_drag:bool,
 }
 impl Grid{
-    fn new()->Self{Self{parser:terminal::parser(12,80),session:None,bounds:Bounds::default(),cell:size(px(8.),px(20.)),metrics:Metrics::new(14.,1.,1.),line_height:1.,rows:vec![],palette:terminal_palette(),wheel:Default::default(),history:0,force_app_scroll:false,scrollbar_grab:None,font_size:14.,marked:String::new(),selection:None,selecting:false}}
+    fn new()->Self{Self{parser:terminal::parser(12,80),session:None,bounds:Bounds::default(),cell:size(px(8.),px(20.)),metrics:Metrics::new(14.,1.,1.),line_height:1.,rows:vec![],palette:terminal_palette(),wheel:Default::default(),history:0,force_app_scroll:false,scrollbar_grab:None,font_size:14.,marked:String::new(),selection:None,selecting:false,app_drag:false}}
     fn sync_theme(&mut self){let p=terminal_palette();if self.palette!=p{self.rows.clear();self.palette=p;}let replies=self.parser.callbacks_mut();replies.foreground=p.foreground;replies.background=p.background;replies.ansi=p.ansi;}
     fn history(&mut self){let screen=self.parser.screen_mut();if screen.alternate_screen(){self.history=0;}else{let offset=screen.scrollback();screen.set_scrollback(usize::MAX);self.history=screen.scrollback();screen.set_scrollback(offset);}}
     fn thumb(&self)->Option<(f32,f32,f32)>{if self.history==0||self.parser.screen().alternate_screen(){return None;}let track=(f32::from(self.bounds.size.height)-16.).max(1.);let rows=self.parser.screen().size().0 as f32;let height=(track*rows/(self.history as f32+rows)).max(18.).min(track);let travel=track-height;let top=8.+travel*(1.-self.parser.screen().scrollback() as f32/self.history as f32);Some((top,height,travel))}
     fn at(&self,p:Point<Pixels>)->(u16,u16){let(rows,cols)=self.parser.screen().size();let row=((f32::from(p.y-self.bounds.origin.y)-8.)/f32::from(self.cell.height)).floor().clamp(0.,rows.saturating_sub(1) as f32) as u16;let mut col=((f32::from(p.x-self.bounds.origin.x)-8.)/f32::from(self.cell.width)).floor().clamp(0.,cols.saturating_sub(1) as f32) as u16;if col>0&&self.parser.screen().cell(row,col).is_some_and(|c|c.is_wide_continuation()){col-=1;}(row,col)}
+    fn app_mouse(&self,p:Point<Pixels>,code:u8,release:bool){
+        let (row,col)=self.at(p);
+        if let Some(session)=&self.session{
+            let _=session.write(format!("\x1b[<{code};{};{}{}",col+1,row+1,if release{'m'}else{'M'}).as_bytes());
+        }
+    }
     fn selection(&self)->Option<((u16,u16),(u16,u16))>{let(a,b)=self.selection?;if a==b{return None;}Some(if a<b{(a,b)}else{(b,a)})}
     fn copy(&self)->String{if let Some((a,b))=self.selection(){self.parser.screen().contents_between(a.0,a.1,b.0,b.1.saturating_add(if self.parser.screen().cell(b.0,b.1).is_some_and(|c|c.is_wide()){2}else{1}))}else{self.parser.screen().contents()}}
 }
@@ -82,7 +88,7 @@ impl TerminalView{
     }
     pub fn stop(&mut self,cx:&mut Context<Self>)->Option<async_channel::Receiver<()>>{
         self.generation+=1;self.starting=false;self.reader=None;self.menu=false;self.notice=true;
-        let done=self.session.take().map(|s|s.stop());let mut g=self.grid.borrow_mut();g.session=None;g.marked.clear();g.selecting=false;drop(g);
+        let done=self.session.take().map(|s|s.stop());let mut g=self.grid.borrow_mut();g.session=None;g.marked.clear();g.selecting=false;g.app_drag=false;drop(g);
         self.status="Terminal stopped · restart to open a new shell".into();cx.notify();done
     }
     fn ask_stop(&mut self,restart:bool,window:&mut Window,cx:&mut Context<Self>){
@@ -114,12 +120,13 @@ impl TerminalView{
         let(x,y)=match event.delta{ScrollDelta::Lines(p)=>{let y=if cfg!(target_os="macos")&&p.y!=0.{p.y.signum()*p.y.abs().max(1.)*3.}else{p.y};(p.x,y)},ScrollDelta::Pixels(p)=>(f32::from(p.x)/f32::from(g.cell.width),f32::from(p.y)/f32::from(g.cell.height))};
         let limit=g.parser.screen().size().0 as f32;let(dx,dy)=g.wheel.steps(x,y,limit);if dx==0&&dy==0{return;}
         let(row,col)=g.at(event.position);let mods=u8::from(event.modifiers.shift)*4+u8::from(event.modifiers.alt)*8+u8::from(event.modifiers.control)*16;
-        let bytes=if g.force_app_scroll&&!event.modifiers.shift{
+        let local=event.modifiers.shift||g.selecting||g.scrollbar_grab.is_some()||g.parser.screen().scrollback()>0;
+        let bytes=if g.force_app_scroll&&!local{
             let mut bytes=vec![];for(steps,positive,negative)in[(dy,64,65),(dx,66,67)]{for _ in 0..steps.unsigned_abs(){bytes.extend(terminal::wheel_report(vt100::MouseProtocolEncoding::Sgr,if steps>0{positive}else{negative},col+1,row+1,mods));}}bytes
-        }else{match terminal::route_wheel(g.parser.screen(),(dx,dy),(col+1,row+1),mods,event.modifiers.shift){
+        }else{match terminal::route_wheel(g.parser.screen(),(dx,dy),(col+1,row+1),mods,local){
             terminal::WheelAction::History(offset)=>{g.parser.screen_mut().set_scrollback(offset);vec![]},terminal::WheelAction::Input(bytes)=>bytes,
         }};
-        g.selection=None;if !bytes.is_empty(){if let Some(s)=&g.session{if let Err(e)=s.write(&bytes){self.status=e;}}}
+        if !g.selecting{g.selection=None;}else{let p=g.at(event.position);if let Some((a,_))=g.selection{g.selection=Some((a,p));}}if !bytes.is_empty(){if let Some(s)=&g.session{if let Err(e)=s.write(&bytes){self.status=e;}}}
         drop(g);cx.notify();
     }
     fn key_down(&mut self,event:&KeyDownEvent,window:&mut Window,cx:&mut Context<Self>){
@@ -154,18 +161,51 @@ impl Render for TerminalView{
         let focused=self.focus.is_focused(window);let grid=self.grid.clone();let paint=self.grid.clone();let focus=self.focus.clone();let input=cx.entity();let owner=cx.entity().downgrade();
         let fs=self.grid.borrow().font_size;let metrics=Metrics::new(fs,self.grid.borrow().line_height,window.scale_factor());let cell=metrics.size;
         let canvas=canvas(move|bounds,_,_|{let mut g=grid.borrow_mut();g.bounds=bounds;if g.cell!=cell||g.metrics!=metrics{g.rows.clear();g.cell=cell;g.metrics=metrics;}
-            let cols=((f32::from(bounds.size.width)-16.)/f32::from(cell.width)).floor().clamp(2.,500.) as u16;let rows=((f32::from(bounds.size.height)-16.)/f32::from(cell.height)).floor().clamp(1.,200.) as u16;
+            let cols=((f32::from(bounds.size.width)-24.)/f32::from(cell.width)).floor().clamp(2.,500.) as u16;let rows=((f32::from(bounds.size.height)-16.)/f32::from(cell.height)).floor().clamp(1.,200.) as u16;
             if g.parser.screen().size()!=(rows,cols){g.parser.screen_mut().set_size(rows,cols);g.rows.clear();g.selection=None;g.history();if let Some(s)=&g.session{s.resize(rows,cols);}}
         },move|bounds,_,window,cx|{
             window.with_content_mask(Some(ContentMask{bounds}),|window|render::paint(&mut paint.borrow_mut(),bounds,focused,window,cx));
             if focused{window.handle_input(&focus,ElementInputHandler::new(bounds,input),cx);}
-            let owner=owner.clone();window.on_mouse_event(move|event:&MouseUpEvent,phase,_,cx|{if phase==DispatchPhase::Capture&&event.button==MouseButton::Left{let _=owner.update(cx,|this,cx|{let mut g=this.grid.borrow_mut();if g.selecting||g.scrollbar_grab.is_some(){g.selecting=false;g.scrollbar_grab=None;drop(g);cx.notify();}});}});
+            let moving=owner.clone();
+            window.on_mouse_event(move |event:&MouseMoveEvent,phase,_,cx|{
+                if phase!=DispatchPhase::Capture{return;}
+                let _=moving.update(cx,|this,cx|{
+                    let mut g=this.grid.borrow_mut();
+                    if event.pressed_button.is_none(){
+                        if g.app_drag{g.app_mouse(event.position,0,true);g.app_drag=false;}
+                        if !event.modifiers.shift&&g.bounds.contains(&event.position)&&g.parser.screen().alternate_screen()&&g.parser.screen().mouse_protocol_encoding()==vt100::MouseProtocolEncoding::Sgr&&g.parser.screen().mouse_protocol_mode()==vt100::MouseProtocolMode::AnyMotion{g.app_mouse(event.position,35,false);}
+                        return;
+                    }
+                    if event.pressed_button!=Some(MouseButton::Left){return;}
+                    if g.app_drag{g.app_mouse(event.position,32,false);return;}
+                    if let Some((start,offset))=g.scrollbar_grab{
+                        let travel=g.thumb().map_or(1.,|t|t.2.max(1.));
+                        let next=(offset as f32-(f32::from(event.position.y)-start)/travel*g.history as f32).round().clamp(0.,g.history as f32) as usize;
+                        g.parser.screen_mut().set_scrollback(next);g.selection=None;
+                    }else if g.selecting{
+                        let p=g.at(event.position);if let Some((a,_))=g.selection{g.selection=Some((a,p));}
+                    }else{return;}
+                    drop(g);cx.notify();
+                });
+            });
+            let owner=owner.clone();
+            window.on_mouse_event(move|event:&MouseUpEvent,phase,_,cx|{
+                if phase!=DispatchPhase::Capture||event.button!=MouseButton::Left{return;}
+                let _=owner.update(cx,|this,cx|{
+                    let mut g=this.grid.borrow_mut();
+                    if g.app_drag{g.app_mouse(event.position,0,true);g.app_drag=false;cx.stop_propagation();return;}
+                    if g.selecting {let p=g.at(event.position);if let Some((a,_))=g.selection{g.selection=Some((a,p));}}
+                    if g.selecting||g.scrollbar_grab.is_some(){g.selecting=false;g.scrollbar_grab=None;drop(g);cx.stop_propagation();cx.notify();}
+                });
+            });
         }).size_full();
         let cwd=self.cwd.as_ref().map(|p|crate::terminal::shell_cwd(p).to_string_lossy().into_owned()).unwrap_or_default();let active=self.active();
         div().relative().size_full().min_h(px(0.)).flex().flex_col().bg(gpui::rgb(self.grid.borrow().palette.background)).track_focus(&self.focus).key_context("Terminal")
             .on_action(cx.listener(|this,_:&CopyTerminal,w,cx|{cx.stop_propagation();this.copy(w,cx);}))
             .on_action(cx.listener(|this,_:&PasteTerminal,w,cx|{cx.stop_propagation();this.paste(w,cx);}))
-            .on_action(cx.listener(|this,_:&ControlC,_,cx|{cx.stop_propagation();this.status="Ctrl+C sent to terminal".into();this.send(b"\x03",cx);}))
+            .on_action(cx.listener(|this,_:&ControlC,w,cx|{cx.stop_propagation();let selected=this.grid.borrow().selection().is_some();if selected{this.copy(w,cx);}else{this.send(b"\x03",cx);}}))
+            .on_action(cx.listener(|this,_:&TerminalTab,_,cx|{cx.stop_propagation();if !this.composing()&&!this.menu{this.send(b"\t",cx);}}))
+            .on_action(cx.listener(|this,_:&TerminalBackTab,_,cx|{cx.stop_propagation();if !this.composing()&&!this.menu{this.send(b"\x1b[Z",cx);}}))
             .on_action(cx.listener(|this,_:&ControlD,_,cx|{cx.stop_propagation();this.send(b"\x04",cx);}))
             .on_action(cx.listener(|this,_:&ControlS,_,cx|{cx.stop_propagation();this.send(b"\x13",cx);}))
             .on_action(cx.listener(|this,_:&ControlW,_,cx|{cx.stop_propagation();this.send(b"\x17",cx);}))
@@ -180,10 +220,11 @@ impl Render for TerminalView{
                 .children((self.grid.borrow().parser.screen().scrollback()>0).then(||icon_button("terminal-history-badge",Icon::Focus,format!("查看历史 ↑{} · 点击回到实时输出",self.grid.borrow().parser.screen().scrollback()),true,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,w,cx|this.return_live(w,cx)))))
                 .child(icon_button("terminal-maximize",if self.maximized{Icon::Restore}else{Icon::Maximize},if self.maximized{"还原文档/终端分栏"}else{"放大到整个 Document 区域"},self.maximized,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,w,cx|{this.menu=false;this.maximized=!this.maximized;this.focus.focus(w,cx);cx.emit(TerminalEvent::Maximize(this.maximized));cx.notify();})))
                 .child(icon_button("terminal-more",Icon::More,"终端菜单 · 字号、行距、复制、粘贴、停止",self.menu,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|{if this.composing(){this.status="Finish IME input before opening terminal menu".into();this.notice=true;}else{this.menu=!this.menu;}cx.notify();})))
-                .child(icon_button("terminal-hide",Icon::ChevronDown,"收起终端，进程继续运行",false,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|{if this.composing(){this.status="Finish IME input before hiding the terminal".into();this.notice=true;cx.notify();}else{this.menu=false;cx.emit(TerminalEvent::Hide);}}))))
+                .child(icon_button("terminal-hide",Icon::ChevronDown,"收起终端，进程继续运行",false,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|{if this.composing(){this.status="Finish IME input before hiding the terminal".into();this.notice=true;cx.notify();}else{this.menu=false;cx.emit(TerminalEvent::Hide);}})))
+                .child(icon_button("terminal-close",Icon::Close,"关闭终端并结束会话",false,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|{this.stop(cx);this.maximized=false;cx.emit(TerminalEvent::Close);}))))
             .child(div().id("terminal-grid").flex_1().min_h(px(0.)).overflow_hidden().cursor(CursorStyle::IBeam).child(canvas)
-                .on_mouse_down(MouseButton::Left,cx.listener(|this,event:&MouseDownEvent,w,cx|{this.focus.focus(w,cx);let mut g=this.grid.borrow_mut();if f32::from(event.position.x)>=f32::from(g.bounds.right())-8.&&g.thumb().is_some(){let(top,height,travel)=g.thumb().unwrap();let y=f32::from(event.position.y-g.bounds.top());if y<top||y>top+height{let offset=((1.-((y-8.-height/2.)/travel.max(1.)).clamp(0.,1.))*g.history as f32).round() as usize;g.parser.screen_mut().set_scrollback(offset);}g.scrollbar_grab=Some((f32::from(event.position.y),g.parser.screen().scrollback()));g.selecting=false;}else{let p=g.at(event.position);g.selection=Some((p,p));g.selecting=true;}drop(g);cx.stop_propagation();cx.notify();}))
-                .on_mouse_move(cx.listener(|this,event:&MouseMoveEvent,_,cx|{let mut g=this.grid.borrow_mut();if let Some((start,offset))=g.scrollbar_grab{let travel=g.thumb().map(|t|t.2).unwrap_or(1.).max(1.);let next=(offset as f32-(f32::from(event.position.y)-start)/travel*g.history as f32).round().clamp(0.,g.history as f32) as usize;g.parser.screen_mut().set_scrollback(next);g.selection=None;drop(g);cx.notify();return;}if g.selecting{let p=g.at(event.position);if let Some((a,_))=g.selection{g.selection=Some((a,p));}drop(g);cx.notify();}}))
+                .on_mouse_down(MouseButton::Left,cx.listener(|this,event:&MouseDownEvent,w,cx|{this.focus.focus(w,cx);let mut g=this.grid.borrow_mut();if !event.modifiers.shift&&g.parser.screen().alternate_screen()&&g.parser.screen().mouse_protocol_encoding()==vt100::MouseProtocolEncoding::Sgr&&matches!(g.parser.screen().mouse_protocol_mode(),vt100::MouseProtocolMode::ButtonMotion|vt100::MouseProtocolMode::AnyMotion){g.app_drag=true;g.selection=None;g.app_mouse(event.position,0,false);}else if f32::from(event.position.x)>=f32::from(g.bounds.right())-14.&&g.thumb().is_some(){let(top,height,travel)=g.thumb().unwrap();let y=f32::from(event.position.y-g.bounds.top());if y<top||y>top+height{let offset=((1.-((y-8.-height/2.)/travel.max(1.)).clamp(0.,1.))*g.history as f32).round() as usize;g.parser.screen_mut().set_scrollback(offset);}g.scrollbar_grab=Some((f32::from(event.position.y),g.parser.screen().scrollback()));g.selecting=false;}else{let p=g.at(event.position);g.selection=Some((p,p));g.selecting=true;}drop(g);cx.stop_propagation();cx.notify();}))
+
                 .on_scroll_wheel(cx.listener(Self::wheel)))
             .children((self.starting||!active||self.notice).then(||div().h(px(20.)).flex_none().px(px(10.)).truncate().text_size(px(10.)).text_color(rgb(DIM)).child(self.status.clone())))
             .children(self.more_menu(cx))

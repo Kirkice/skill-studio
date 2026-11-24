@@ -39,10 +39,22 @@ pub(super) fn paint(g:&mut Grid,bounds:Bounds<Pixels>,focused:bool,window:&mut W
             }
             let data=Row{cells,runs,selection};if row as usize==g.rows.len(){g.rows.push(data);}else{g.rows[row as usize]=data;}
         }
-        for (col,c) in g.rows[row as usize].cells.iter().enumerate(){
-            let pos=origin+point(m.size.width*col as f32,m.size.height*row as f32);
-            let bg=if c.inverse(){Some(color(c.fgcolor(),p.foreground,&p))}else if c.bgcolor()!=vt100::Color::Default{Some(color(c.bgcolor(),p.background,&p))}else{None};
-            if let Some(bg)=bg{window.paint_quad(fill(Bounds::new(pos,m.size),bg));}
+        let cells=&g.rows[row as usize].cells;
+        let background=|col:usize|{
+            let c=if cells[col].is_wide_continuation()&&col>0{&cells[col-1]}else{&cells[col]};
+            if c.inverse(){Some(color(c.fgcolor(),p.foreground,&p))}
+            else if c.bgcolor()!=vt100::Color::Default{Some(color(c.bgcolor(),p.background,&p))}
+            else{None}
+        };
+        let mut col=0;
+        while col<cells.len(){
+            let bg=background(col);
+            let start=col;col+=1;
+            while col<cells.len()&&background(col)==bg{col+=1;}
+            if let Some(bg)=bg{
+                let pos=origin+point(m.size.width*start as f32,m.size.height*row as f32);
+                window.paint_quad(fill(Bounds::new(pos,size(m.size.width*(col-start) as f32,m.size.height)),bg));
+            }
         }
         if let Some((left,right))=selection{window.paint_quad(fill(Bounds::new(origin+point(m.size.width*left as f32,m.size.height*row as f32),size(m.size.width*(right-left) as f32,m.size.height)),gpui::rgb(p.selection)));}
         for(col,c)in g.rows[row as usize].cells.iter().enumerate(){
@@ -73,7 +85,7 @@ pub(super) fn paint(g:&mut Grid,bounds:Bounds<Pixels>,focused:bool,window:&mut W
             }}
         }
     }
-    if let Some((top,height,_))=g.thumb(){window.paint_quad(fill(Bounds::new(point(bounds.right()-px(6.),bounds.top()+px(top)),size(px(3.),px(height))),Hsla::from(gpui::rgb(p.cursor)).opacity(0.45)));}
+    if let Some((top,height,_))=g.thumb(){window.paint_quad(fill(Bounds::new(point(bounds.right()-px(10.),bounds.top()+px(top)),size(px(6.),px(height))),Hsla::from(gpui::rgb(p.cursor)).opacity(0.45)));}
     if focused&&!g.marked.is_empty(){
         let(r,c)=g.parser.screen().cursor_position();let run=TextRun{len:g.marked.len(),font:cell_font(false,false),color:gpui::rgb(p.foreground).into(),..Default::default()};let line=window.text_system().shape_line(g.marked.clone().into(),fs,&[run],None);let pos=origin+point(m.size.width*c as f32,m.size.height*r as f32);window.paint_quad(fill(Bounds::new(pos,size(line.width,m.size.height)),gpui::rgb(p.background)));let _=line.paint(m.text_origin(&line,pos),m.size.height,TextAlign::Left,None,window,cx);window.paint_quad(fill(Bounds::new(pos+point(px(0.),m.underline),size(line.width,m.stroke)),gpui::rgb(p.cursor)));
     }

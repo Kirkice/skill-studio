@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="SkillRider" Language="1033" Version="0.1.0" Manufacturer="SkillRider" UpgradeCode="2dd0e909-ea16-4a7f-9045-a4c23914366c">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" Platform="x64" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of SkillRider is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="SkillRider">
+          <Component Id="App" Guid="cf8ed937-a8e7-407c-9c66-81f12cbbe801" Win64="yes"><File Id="AppExe" Source="$(var.ReleaseDir)\skill-studio-gpui.exe" /><RemoveFolder Id="RemoveInstallFolder" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\SkillRider\Installer" Name="App" Type="integer" Value="1" KeyPath="yes" /></Component>
+          <Component Id="ConPty" Guid="cf8ed937-a8e7-407c-9c66-81f12cbbe802" Win64="yes"><File Source="$(var.ReleaseDir)\conpty.dll" /><RegistryValue Root="HKCU" Key="Software\SkillRider\Installer" Name="ConPty" Type="integer" Value="1" KeyPath="yes" /></Component>
+          <Component Id="ConsoleHost" Guid="cf8ed937-a8e7-407c-9c66-81f12cbbe803" Win64="yes"><File Source="$(var.ReleaseDir)\OpenConsole.exe" /><RegistryValue Root="HKCU" Key="Software\SkillRider\Installer" Name="ConsoleHost" Type="integer" Value="1" KeyPath="yes" /></Component>
+          <Component Id="Notices" Guid="cf8ed937-a8e7-407c-9c66-81f12cbbe804" Win64="yes"><File Source="$(var.NoticesFile)" /><RegistryValue Root="HKCU" Key="Software\SkillRider\Installer" Name="Notices" Type="integer" Value="1" KeyPath="yes" /></Component>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Component Id="StartShortcut" Guid="c71187f7-df5b-45f1-920c-1c300bf4dcc4">
+          <Shortcut Id="StartSkillRider" Name="SkillRider" Target="[INSTALLFOLDER]skill-studio-gpui.exe" WorkingDirectory="INSTALLFOLDER" />
+          <RegistryValue Root="HKCU" Key="Software\SkillRider\Installer" Name="StartShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+    <Feature Id="Main" Title="SkillRider" Level="1">
+      <ComponentRef Id="App" /><ComponentRef Id="ConPty" /><ComponentRef Id="ConsoleHost" /><ComponentRef Id="Notices" /><ComponentRef Id="StartShortcut" />
+    </Feature>
+  </Product>
+</Wix>

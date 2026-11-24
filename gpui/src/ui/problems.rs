@@ -37,8 +37,7 @@ impl Studio {
                 .child(div().text_size(px(11.)).text_color(rgb(ACCENT)).child(format!("○ {info}")))
                 .child(div().flex_1())
                 .child(icon_button("rerun-checks", Icon::Refresh, "Run workspace checks", false, self.graph.is_some()).on_click(cx.listener(|this, _, _, cx| this.run_checks(cx))))
-                .child(icon_button("show-terminal-from-problems", Icon::Terminal, "Show terminal", false, true).on_click(cx.listener(|this, _, window, cx| this.show_terminal(window, cx))))
-                .child(icon_button("hide-problems", Icon::ChevronDown, "Hide Problems", false, true).on_click(cx.listener(|this, _, window, cx| this.hide_bottom_panel(window, cx)))))
+                .child(icon_button("hide-problems", Icon::ChevronDown, "Hide Problems", false, true).on_click(cx.listener(|this, _, window, cx| this.toggle_problems(window, cx)))))
             .child(list)
     }
 }
