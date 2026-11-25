@@ -1,0 +1,77 @@
+# SkillRider
+
+SkillRider 是一个用 Rust 和 GPUI 构建的本地桌面工作台，用来编写、阅读和检查以 `SKILL.md` 为入口的技能工作区。你可以从入口文档顺着引用打开子文档和脚本，定位断链与循环引用，再用 Pi Trace 对照实际运行中发生的工具调用。
+
+## 快速开始
+
+在仓库根目录运行：
+
+```sh
+cargo run --release --locked
+```
+
+启动后选择 **Open workspace**，打开 [`examples/skillrider-smoke`](examples/skillrider-smoke)。这个示例包含嵌套引用、缺失目标和未引用文件，适合快速体验：
+
+1. 在**依赖图**切换直接和递归依赖，查看引用关系。
+2. 打开 **Problems**，选择一项诊断跳到源文件。
+3. 编辑 Markdown，再切换到渲染预览查看效果。
+
+想看多目录组织方式，可以打开 [`examples/workspace`](examples/workspace)，其中包含技能入口、参考文档、脚本和共享文件。也可以把目录或单个文件直接拖入窗口。
+
+## 主要功能
+
+| 功能 | 用途 |
+| --- | --- |
+| 文件树与多标签编辑 | 浏览工作区、固定标签、查找替换、保存文本，并在文件被外部修改时检查保存冲突。`New Skill` 可创建带模板 `SKILL.md` 的新目录。 |
+| Markdown 与图片预览 | 在 Markdown 源码和渲染预览之间切换；可预览 PNG、JPEG、GIF、WebP 和 BMP。 |
+| 依赖图 | 查看 Skill、文档、脚本和缺失引用。支持搜索、聚焦、按依赖范围筛选，以及保存、导入、导出和重置布局。调整布局不会修改源文件。 |
+| 流程图 | 从 Markdown 二级标题中提取候选阶段，优先识别 `Step`、`Phase`、`步骤`、`阶段`；从原文摘取动作、目的、条件、确认要求和输入输出。可以进入子流程或跳回来源行。 |
+| Problems | 检查断链、扫描警告、循环引用、未被引用的文档或脚本，以及未识别到显式触发条件的 Skill。 |
+| Git 变更标记 | 以 `HEAD` 为基线显示新增、修改、删除和未跟踪文件，并为打开的修改文档提供行级标记。需要本机安装 Git，且仓库已有首次提交。 |
+| 内置终端 | 在工作区目录打开本机 Shell，手动运行命令。浏览文件或点击脚本节点不会执行脚本。 |
+| Pi Trace | 观察外部 Pi 会话的工具调用、状态、相关路径和 Token 统计。需要可用的本机 Pi 启动器；打开追踪面板后，使用它提供的启动命令连接会话。 |
+
+编辑器支持语法高亮、行号和自动换行；可在设置中调整主题、强调色、编辑器字号、终端字号与行高。
+
+## 使用边界
+
+- **流程图是对文档的解读，不是执行引擎。** 它不运行步骤，不强制执行文档中的确认要求，也不会调用模型补全信息。
+- **Problems 是静态检查。** 未被索引到引用不代表文件无用，未识别到触发条件也不代表原文没有描述；检查不会验证脚本或 Skill 的实际行为。
+- **Pi Trace 只展示收到的运行事件。** 图谱中的运行标记依赖路径和调用证据，不保证每次工具调用都能对应到一个文档步骤。
+- 文本编辑限 UTF-8，单个文本文件上限约 2 MB；动画图片只预览首帧。不内嵌预览 PDF、Office 文档和压缩包。Markdown 预览只解析工作区内的本地资源。
+
+## 快捷键
+
+| 操作 | Windows | macOS |
+| --- | --- | --- |
+| 命令面板 | `Ctrl+Shift+P` | `Cmd+Shift+P` |
+| 保存文档 | `Ctrl+S` | `Cmd+S` |
+| 查找 | `Ctrl+F` | `Cmd+F` |
+| 关闭标签 | `Ctrl+W` | `Cmd+W` |
+| 切换 Markdown 预览 | `Ctrl+Shift+V` | `Cmd+Shift+V` |
+| 切换终端 | `` Ctrl+` `` | `` Ctrl+` `` |
+
+## 构建与测试
+
+项目使用 [`rust-toolchain.toml`](rust-toolchain.toml) 固定 Rust **1.95.0**，推荐通过 `rustup` 管理工具链。Windows 构建需要 MSVC C++ 构建工具和 Windows SDK；macOS 需要 Xcode Command Line Tools。仓库的 [CI 工作流](.github/workflows/gpui-build.yml) 配置了 Windows 和 macOS 的构建与打包任务。
+
+```sh
+cargo test --locked
+cargo build --release --locked
+```
+
+Windows 可执行文件位于 `gpui/target/release/skill-studio-gpui.exe`。若要按 CI 的方式准备 Windows ConPTY 运行时，在构建前从仓库根目录运行以下命令（需要 Python）：
+
+```sh
+python tools/prepare_conpty.py --profile debug
+python tools/prepare_conpty.py --profile release
+```
+
+Windows 上可用 `gpui/smoke.ps1` 检查 Release 程序能否在五秒内创建窗口；它不替代交互测试。
+
+## 项目目录
+
+- [`gpui/src/`](gpui/src/)：当前桌面应用入口、编辑器、工作区扫描、图谱和界面。
+- [`gpui/vendor/portable-pty/`](gpui/vendor/portable-pty/)：终端使用的本地 PTY 依赖。
+- [`examples/`](examples/)：用于体验和回归检查的示例工作区。
+- [`tools/`](tools/)：Windows 运行时准备、打包和图标工具。
