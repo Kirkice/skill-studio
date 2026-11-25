@@ -57,6 +57,48 @@ impl Studio {
     }
     fn request_close(&mut self,window:&mut Window,cx:&mut Context<Self>)->bool{
         if self.closing_pending{return false;}
+        if self.saving{
+            self.status="Save in progress. Please wait before closing.".into();cx.notify();return false;
+        }
+        let dirty:Vec<_>=self.documents.tabs.iter().filter(|tab|tab.dirty)
+            .map(|tab|(tab.id.clone(),tab.token,tab.editor.read(cx).value())).collect();
+        if dirty.is_empty(){return self.close_application(window,cx);}
+        self.closing_pending=true;
+        let detail=if dirty.len()==1{format!("Save changes to {} before exiting?",dirty[0].0)}else{format!("Save changes to all {} modified documents before exiting?",dirty.len())};
+        let answer=window.prompt(PromptLevel::Warning,"Unsaved changes",Some(&detail),&[PromptButton::ok(if dirty.len()==1{"Save"}else{"Save All"}),PromptButton::ok("Don't Save"),PromptButton::cancel("Cancel")],cx);
+        cx.spawn_in(window,async move|this,cx|{
+            let choice=answer.await.ok();
+            let mut saved=choice==Some(0);
+            if saved{
+                for (id,token,_) in &dirty{
+                    if this.update_in(cx,|this,w,cx|{
+                        if this.documents.get(id).is_some_and(|t|t.token==*token&&t.dirty){this.save_tab(id.clone(),false,w,cx);}
+                    }).is_err(){return;}
+                    loop{
+                        match this.update_in(cx,|this,_,_|(this.saving,this.documents.get(id).is_some_and(|t|t.dirty))){
+                            Ok((true,_))=>cx.background_executor().timer(std::time::Duration::from_millis(30)).await,
+                            Ok((false,still_dirty))=>{saved=!still_dirty;break;},
+                            Err(_)=>return,
+                        }
+                    }
+                    if !saved{break;}
+                }
+            }
+            let _=this.update_in(cx,|this,w,cx|{
+                this.closing_pending=false;
+                if saved{
+                    if this.request_close(w,cx){w.remove_window();}
+                }else if choice==Some(1)&&!this.saving{
+                    let unchanged=this.documents.tabs.iter().filter(|t|t.dirty).all(|t|dirty.iter().any(|(id,token,value)|id==&t.id&&*token==t.token&&*value==t.editor.read(cx).value()));
+                    if unchanged{if this.close_application(w,cx){w.remove_window();}}
+                    else{this.status="Documents changed during confirmation; window kept open".into();}
+                }
+                cx.notify();
+            });
+        }).detach();
+        false
+    }
+    fn close_application(&mut self,window:&mut Window,cx:&mut Context<Self>)->bool{
         self.closing_pending=true;
         self.pi_trace.update(cx,|trace,cx|{trace.stop(cx);trace.close_details(cx);});
         let done=self.terminal.update(cx,|terminal,cx|terminal.stop(cx));
