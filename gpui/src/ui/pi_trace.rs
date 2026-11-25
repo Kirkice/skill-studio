@@ -13,6 +13,7 @@ pub(crate) enum State {
     Done,
     Failed,
     Interrupted,
+    Skipped,
 }
 impl State {
     pub(crate) fn color(self) -> u32 {
@@ -20,7 +21,7 @@ impl State {
             Self::Running => 0x4ea1ff,
             Self::Done => 0x8acf97,
             Self::Failed => 0xdc8c95,
-            Self::Interrupted => 0xc8a479,
+            Self::Interrupted | Self::Skipped => 0xc8a479,
         }
     }
     fn label(self) -> &'static str {
@@ -29,6 +30,7 @@ impl State {
             Self::Done => "✓ Observed",
             Self::Failed => "× Failed",
             Self::Interrupted => "– Interrupted",
+            Self::Skipped => "– Skipped",
         }
     }
 }
@@ -46,7 +48,19 @@ pub(crate) struct PiTraceView {
     command: String,
     status: String,
     calls: Vec<Call>,
+    graph_highlights_hidden: bool,
+    stages: std::collections::HashMap<(String, String), State>,
     tokens: u64,
+    telemetry: Vec<String>,
+    metrics: std::collections::HashMap<
+        (String, String),
+        (
+            Option<std::time::Instant>,
+            u64,
+            Option<u64>,
+            Option<(u64, u64)>,
+        ),
+    >,
 }
 impl PiTraceView {
     pub fn new() -> Self {
@@ -57,7 +71,11 @@ impl PiTraceView {
             command: String::new(),
             status: "Debug off".into(),
             calls: vec![],
+            stages: Default::default(),
+            graph_highlights_hidden: false,
             tokens: 0,
+            telemetry: vec![],
+            metrics: Default::default(),
         }
     }
     pub fn active(&self) -> bool {
@@ -65,6 +83,9 @@ impl PiTraceView {
     }
     pub(crate) fn paths(&self) -> std::collections::HashMap<String, State> {
         let mut paths = std::collections::HashMap::new();
+        if self.graph_highlights_hidden {
+            return paths;
+        }
         for call in &self.calls {
             if let Some(path) = &call.path {
                 let state = paths.entry(path.clone()).or_insert(call.state);
@@ -75,6 +96,17 @@ impl PiTraceView {
         }
         paths
     }
+    pub(super) fn graph_stages(&self) -> std::collections::HashMap<(String, String), State> {
+        if self.graph_highlights_hidden {
+            Default::default()
+        } else {
+            self.stages.clone()
+        }
+    }
+    pub(super) fn clear_graph_highlights(&mut self, cx: &mut Context<Self>) {
+        self.graph_highlights_hidden = true;
+        cx.notify();
+    }
     pub fn start(&mut self, root: PathBuf, launcher: &str, cx: &mut Context<Self>) {
         if self.active() {
             return;
@@ -82,8 +114,11 @@ impl PiTraceView {
         match Self::prepare(&root, launcher) {
             Ok((dir, socket, command, token)) => {
                 self.bridge = Some(dir);
+                self.metrics.clear();
+                self.telemetry.clear();
                 self.command = command;
                 self.calls.clear();
+                self.stages.clear();
                 self.tokens = 0;
                 self.status = "Waiting for Pi · paste the copied command into the terminal".into();
                 self.reader = Some(cx.spawn(async move |this, cx| {
@@ -184,18 +219,73 @@ impl PiTraceView {
         cx.notify();
     }
     fn finish_pending(&mut self) {
+        for m in self.metrics.values_mut() {
+            if let Some(t) = m.0.take() {
+                m.1 += t.elapsed().as_millis() as u64;
+            }
+        }
+        for state in self.stages.values_mut() {
+            if *state == State::Running {
+                *state = State::Interrupted;
+            }
+        }
         for call in &mut self.calls {
             if call.state == State::Running {
                 call.state = State::Interrupted;
             }
         }
     }
+    fn note(&mut self, line: String) {
+        if self.telemetry.len() >= 1000 {
+            self.telemetry.remove(0);
+        }
+        self.telemetry.push(line);
+    }
+    pub(super) fn metric_labels(&self) -> std::collections::HashMap<(String, String), String> {
+        if self.graph_highlights_hidden {
+            return Default::default();
+        }
+        let mut labels = std::collections::HashMap::new();
+        for (key, m) in &self.metrics {
+            let ms = m.1 + m.0.map_or(0, |t| t.elapsed().as_millis() as u64);
+            labels.insert(
+                key.clone(),
+                format!(
+                    "{:.2} s\n{}\n{}",
+                    ms as f64 / 1000.,
+                    m.2.map_or("—".into(), |v| v.to_string()),
+                    m.3.map_or("—".into(), |(n, w)| format!("≈{:.3} / {:.3} MB", n as f64 * 0.000004, w as f64 * 0.000004))
+                ),
+            );
+        }
+        let mut files = std::collections::HashMap::<String, (usize, f64)>::new();
+        for call in &self.calls {
+            if call.name != "skillrider_stage"
+                && let Some(path) = &call.path
+            {
+                let m = files.entry(path.clone()).or_default();
+                m.0 += 1;
+                m.1 += call.ms.unwrap_or(0.);
+            }
+        }
+        for (path, (count, ms)) in files {
+            labels.insert(
+                (path, String::new()),
+                format!("{ms:.0} ms ({count}×)\n—\n—"),
+            );
+        }
+        labels
+    }
     fn event(&mut self, root: &Path, value: Value) {
         let s = |k: &str| value[k].as_str().unwrap_or_default();
         match s("type") {
             "ready" => self.status = "Pi terminal connected".into(),
             "agent_start" => {
+                self.metrics.clear();
+                self.telemetry.clear();
+                self.graph_highlights_hidden = false;
                 self.calls.clear();
+                self.stages.clear();
                 self.tokens = 0;
                 self.status = "Pi running".into();
             }
@@ -206,6 +296,30 @@ impl PiTraceView {
             "session_shutdown" => {
                 self.finish_pending();
                 self.status = "Pi exited · waiting for terminal".into();
+            }
+            "stage" => {
+                let state = match s("state") {
+                    "running" => State::Running,
+                    "done" => State::Done,
+                    "failed" => State::Failed,
+                    "skipped" => State::Skipped,
+                    _ => return,
+                };
+                if let Some(path) = relative(root, s("cwd"), s("path")) {
+                    let key = (path, s("heading").into());
+                    let metric = self.metrics.entry(key.clone()).or_default();
+                    if state == State::Running {
+                        metric.0.get_or_insert_with(std::time::Instant::now);
+                    } else if let Some(start) = metric.0.take() {
+                        metric.1 += start.elapsed().as_millis() as u64;
+                    }
+                    self.stages.insert(key, state);
+                    self.note(format!(
+                        "{} · {} · explicit stage report",
+                        state.label(),
+                        s("heading")
+                    ));
+                }
             }
             "tool_execution_start" => {
                 if self.calls.len() >= 1000 {
@@ -227,9 +341,39 @@ impl PiTraceView {
                         State::Done
                     };
                     call.ms = value["ms"].as_f64();
+                    if !s("error").is_empty() {
+                        let msg = format!("{} · {}", call.name, s("error"));
+                        self.note(msg);
+                    }
                 }
             }
+            "activity" => self.note(s("label").into()),
             "message_end" => {
+                let context = value["context"].as_u64().zip(value["window"].as_u64());
+                let mut active = self.stages.iter().filter(|(_, v)| **v == State::Running);
+                if let Some((key, _)) = active.next()
+                    && active.next().is_none()
+                {
+                    let m = self.metrics.entry(key.clone()).or_default();
+                    if let Some(n) = value["tokens"].as_u64() {
+                        m.2 = Some(m.2.unwrap_or(0).saturating_add(n));
+                    }
+                    if let Some(c) = context
+                        && m.3.is_none_or(|old| c.0 > old.0)
+                    {
+                        m.3 = Some(c);
+                    }
+                }
+                self.note(format!(
+                    "Model {} · in {} / out {} / cache {} · context {} · cost {} · {}",
+                    s("model"),
+                    value["input"],
+                    value["output"],
+                    value["cache"],
+                    context.map_or("—".into(), |(a, b)| format!("≈{a}/{b}")),
+                    value["cost"],
+                    s("error")
+                ));
                 self.tokens = self
                     .tokens
                     .saturating_add(value["tokens"].as_u64().unwrap_or(0))
@@ -292,6 +436,24 @@ impl Render for TraceDetails {
                     .child(caption(format!("{} tokens", trace.tokens))),
             )
             .child(trace.rows())
+            .child(
+                div()
+                    .id("pi-telemetry")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .p(px(8.))
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .child(caption("Run telemetry"))
+                    .children(
+                        trace
+                            .telemetry
+                            .iter()
+                            .rev()
+                            .map(|event| div().text_size(px(11.)).child(event.clone())),
+                    ),
+            )
     }
 }
 
@@ -415,15 +577,19 @@ impl Render for PiTraceView {
                     .items_center()
                     .gap(px(8.))
                     .child(
-                        icon_label("pi-trace-details", Icon::ExternalWindow, "Pi Trace", false, true)
-                            .h(px(24.))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(RAISED))
-                            .tooltip(|_, cx| {
-                                cx.new(|_| Hint("Open Pi Trace details".into())).into()
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.show_details(cx))),
+                        icon_label(
+                            "pi-trace-details",
+                            Icon::ExternalWindow,
+                            "Pi Trace",
+                            false,
+                            true,
+                        )
+                        .h(px(24.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(RAISED))
+                        .tooltip(|_, cx| cx.new(|_| Hint("Open Pi Trace details".into())).into())
+                        .on_click(cx.listener(|this, _, _, cx| this.show_details(cx))),
                     )
                     .child(
                         div()

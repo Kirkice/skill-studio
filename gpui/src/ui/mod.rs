@@ -10,6 +10,7 @@ mod file_preview;
 pub(crate) mod terminal;
 pub(crate) mod pi_trace;
 mod problems;
+pub(crate) mod git_changes;
 use crate::{commands::Command, filter, role, Studio, TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview, ToggleTerminal};
 use controls::*;
 use icons::{icon,Icon,file_icon,command_icon};
@@ -218,6 +219,7 @@ impl Render for Studio {
         let visible=self.graph.as_ref().map(|g|filter::visible(g,self.scope,if self.focus{self.selected.as_deref()}else{None},&query,self.show_missing)).unwrap_or_default();
         self.explorer.sync(self.graph_revision,self.graph.as_ref());
         self.explorer.filter(&query,self.focus.then_some(&visible));
+        self.sync_git(cx);
         let sidebar=self.sidebar(cx);
         let graph=self.graph_view(&visible,cx);
         let available=(f32::from(window.viewport_size().height)-70.).max(300.);

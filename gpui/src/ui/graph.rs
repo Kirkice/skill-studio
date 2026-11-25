@@ -23,13 +23,24 @@ impl Studio {
         if self.graph_canvas.is_none(){let owner=cx.entity().downgrade();self.graph_canvas=Some(cx.new(|_|GraphCanvas::new(owner)));}
         let entity=self.graph_canvas.as_ref().unwrap().clone();
         entity.update(cx,|canvas,cx|canvas.sync(self.graph_revision,graph,visible,&self.positions,&self.roles,self.selected.as_deref(),self.zoom,cx));
+        let git=self.git.files.clone();
+        entity.update(cx,|canvas,cx|{if !super::git_changes::same_snapshot(&canvas.git,&git){canvas.git=git.clone();cx.notify();}});
         let link_count=entity.read(cx).references.len();
         if self.flow_canvas.is_none(){let owner=cx.entity().downgrade();self.flow_canvas=Some(cx.new(|_|flow::FlowCanvas::new(owner)));}
         let flow_entity=self.flow_canvas.as_ref().unwrap().clone();
         let paths=self.pi_trace.read(cx).paths();
-        flow_entity.update(cx,|canvas,cx|{canvas.sync(self.graph_revision,graph,cx);canvas.set_trace(paths,cx);});
+        let stages=self.pi_trace.read(cx).graph_stages();
+        let metrics=self.pi_trace.read(cx).metric_labels();
+        flow_entity.update(cx,|canvas,cx|{canvas.sync(self.graph_revision,graph,cx);canvas.set_trace(paths,stages,metrics,cx);canvas.set_git(git,cx);});
         panel=panel.child(bar().bg(rgb(PANEL)).child(div().flex_1().min_w(px(0.)).flex().items_center().gap(px(8.)).child(icon(Icon::Graph).text_color(rgb(ACCENT))).child(if self.flow_mode{"Skill orchestration"}else{"Reference graph"}).child(caption(if self.flow_mode{"Document stages · candidate".into()}else{format!("{} nodes · {link_count} links",visible.len())})))
-            .child(icon_button("graph-refresh",Icon::Refresh,"Refresh workspace index",false,true).on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx)))));
+            .child(icon_button("graph-git-diff",Icon::Diff,if self.git.enabled{"Hide Git Diff · HEAD"}else{"Show Git Diff · HEAD"},self.git.enabled,true).on_click(cx.listener(|this,_,_,cx|{this.git.enabled=!this.git.enabled;cx.notify();})))
+            .child(icon_button("graph-refresh",Icon::Refresh,"Refresh workspace index and clear Debug highlights",false,true).on_click(cx.listener(|this,_,w,cx|{this.pi_trace.update(cx,|trace,cx|trace.clear_graph_highlights(cx));this.refresh(w,cx);}))));
+        if self.git.enabled{
+            use crate::git_diff::Change;
+            panel=panel.child(div().px(px(10.)).flex().items_center().gap(px(10.)).flex_none().text_size(px(11.)).text_color(rgb(MUTED))
+                .child(div().flex_1().min_w(px(0.)).truncate().child(self.git_status()))
+                .children([Change::Added,Change::Modified,Change::Deleted].map(|change|div().flex_none().text_color(gpui::rgb(change.color())).child(change.label()))));
+        }
         let mut scopes=div().flex().gap(px(2.)).p(px(2.)).bg(rgb(BG)).rounded(px(6.));
         for (i,(scope,glyph,hint)) in [(crate::filter::Scope::Direct,Icon::ArrowRight,"Direct Skill references"),(crate::filter::Scope::Recursive,Icon::Branch,"Recursive Skill references"),(crate::filter::Scope::All,Icon::Layers,"All files")].into_iter().enumerate(){
             scopes=scopes.child(icon_button(("scope",i),glyph,hint,self.scope==scope,true).h(px(26.)).on_click(cx.listener(move|this,_,_,cx|{this.scope=scope;this.focus=false;cx.notify();})));
@@ -82,6 +93,7 @@ fn world_bounds(positions:&layout::Positions)->(f32,f32,f32,f32){
     positions.values().fold((f32::INFINITY,f32::INFINITY,f32::NEG_INFINITY,f32::NEG_INFINITY),|(x0,y0,x1,y1),p|(x0.min(p.x),y0.min(p.y),x1.max(p.x+264.),y1.max(p.y+188.)))
 }
 pub(crate) struct GraphCanvas {
+    git:Option<std::sync::Arc<crate::git_diff::Snapshot>>,
     owner:WeakEntity<Studio>,
     revision:u64,
     graph:Option<Graph>,
@@ -107,7 +119,7 @@ pub(crate) struct GraphCanvas {
 }
 impl GraphCanvas {
     fn new(owner:WeakEntity<Studio>)->Self{
-        Self{owner,revision:u64::MAX,graph:None,visible:HashSet::new(),saved_positions:Default::default(),automatic_positions:Default::default(),positions:Default::default(),roles:Default::default(),node_roles:Default::default(),meanings:Default::default(),incoming:Default::default(),outgoing:Default::default(),references:vec![],reference_menu:None,selected:None,zoom:1.,drag:None,drag_moved:false,camera:Point::default(),viewport_bounds:Rc::new(Cell::new(Bounds::default())),pan:None,minimap:Default::default()}
+        Self{git:None,owner,revision:u64::MAX,graph:None,visible:HashSet::new(),saved_positions:Default::default(),automatic_positions:Default::default(),positions:Default::default(),roles:Default::default(),node_roles:Default::default(),meanings:Default::default(),incoming:Default::default(),outgoing:Default::default(),references:vec![],reference_menu:None,selected:None,zoom:1.,drag:None,drag_moved:false,camera:Point::default(),viewport_bounds:Rc::new(Cell::new(Bounds::default())),pan:None,minimap:Default::default()}
     }
     fn sync(&mut self,revision:u64,graph:&Graph,visible:&HashSet<String>,saved:&layout::Positions,roles:&layout::Roles,selected:Option<&str>,zoom:f32,cx:&mut Context<Self>){
         let changed=self.revision!=revision || self.visible!=*visible;
@@ -222,6 +234,9 @@ impl Render for GraphCanvas {
             let context=meaning.and_then(|m|m.condition.as_ref()).map(|p|format!("条件：{}",p.text)).unwrap_or_else(||n.headings.iter().take(3).cloned().collect::<Vec<_>>().join(" · "));
             let count_out=self.outgoing.get(n.id.as_str()).map_or(0,HashSet::len);let count_in=self.incoming.get(n.id.as_str()).map_or(0,HashSet::len);
             let hint=if kind=="subflow"&&!self.roles.contains_key(&n.id){" · inferred"}else{""};
+            if let Some(change)=self.git.as_ref().and_then(|files|files.get(&id)).and_then(|file|file.change){
+                layer=layer.child(super::git_changes::outline(camera.x+px(p.x*z),camera.y+px(p.y*z),px(264.*z),px(188.*z),change));
+            }
             layer=layer.child(div().id(("graph-node",i)).absolute().left(camera.x+px(p.x*z)).top(camera.y+px(p.y*z)).w(px(264.*z)).h(px(188.*z)).flex().flex_col().overflow_hidden().rounded(px(8.)).border_1().border_color(rgb(if selected{visual::INCOMING}else{BORDER})).bg(rgb(if selected{RAISED}else{BG})).shadow_md().cursor(if self.pan.is_some(){CursorStyle::ClosedHand}else{CursorStyle::PointingHand}).hover(|s|s.border_color(rgb(color)))
                 .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.))).rounded(px(2.)).bg(rgb(color)))
                 .child(div().flex_1().min_h(px(0.)).px(px(13.*z)).pt(px(10.*z)).flex().flex_col().gap(px(5.*z))

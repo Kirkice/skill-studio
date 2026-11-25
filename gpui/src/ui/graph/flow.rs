@@ -2,7 +2,8 @@
 use super::*;
 use crate::flow::{Flow,Call};
 use super::visual;
-const CARD_W:f32=320.;
+use crate::ui::pi_trace::State;
+const CARD_W:f32=350.;
 fn semantic_height(m:&crate::meaning::Meaning)->f32{214.+if m.condition.is_some()||m.confirmation.is_some(){28.}else{0.}+if m.input.is_some(){24.}else{0.}+if m.output.is_some(){24.}else{0.}}
 #[derive(Clone)]
 struct Card{id:String,title:String,source:String,line:usize,x:f32,y:f32,h:f32,kind:&'static str,context_source:Option<String>,meaning:crate::meaning::Meaning,evidence:Option<(String,usize)>}
@@ -11,6 +12,23 @@ struct Connection{from:usize,to:usize,side:bool}
 #[derive(Default)]
 struct Diagram{cards:Vec<Card>,edges:Vec<Connection>}
 impl Diagram{
+ // Only attribute a file to a stage when its call site is unambiguous.
+ fn stage_trace(&self,trace:&HashMap<String,State>)->HashMap<usize,State>{
+  let mut owners:HashMap<&str,Option<usize>>=HashMap::new();
+  for edge in self.edges.iter().filter(|edge|edge.side){
+   owners.entry(&self.cards[edge.to].source)
+    .and_modify(|owner|{if *owner!=Some(edge.from){*owner=None;}})
+    .or_insert(Some(edge.from));
+  }
+  let rank=|s:State|match s{State::Running=>4,State::Failed=>3,State::Interrupted|State::Skipped=>2,State::Done=>1};
+  let mut stages=HashMap::new();
+  for (path,owner) in owners{
+   if let (Some(index),Some(&state))=(owner,trace.get(path)){
+    stages.entry(index).and_modify(|old|{if rank(state)>rank(*old){*old=state;}}).or_insert(state);
+   }
+  }
+  stages
+ }
  fn push(&mut self,card:Card)->usize{let index=self.cards.len();self.cards.push(card);index}
  fn call(&mut self,flows:&[Flow],call:&Call,id:String,x:f32,y:f32,source:&str,context:&crate::meaning::Meaning)->usize{
   let child=flows.iter().find(|f|f.source==call.target);
@@ -29,7 +47,7 @@ impl Diagram{
    let index=diagram.push(Card{id:id.clone(),title:if stage.meaning.action.text.is_empty(){stage.title.clone()}else{stage.meaning.action.text.clone()},source:root.source.clone(),line:stage.line,x,y,h:semantic_height(&stage.meaning),kind:"stage",context_source:None,meaning:stage.meaning.clone(),evidence:None});
    diagram.edges.push(Connection{from:previous,to:index,side:false});previous=index;
    let mut sides=[y,y];
-   for(i,call)in stage.calls.iter().enumerate(){let side=i%2;let call_x=if side==0{240.}else{960.};
+   for(i,call)in stage.calls.iter().enumerate(){let side=i%2;let call_x=if side==0{214.}else{1240.};
     let target=diagram.call(flows,call,format!("{id}/call/{}:{}",call.line,call.target),call_x,sides[side],&root.source,&stage.meaning);
     diagram.edges.push(Connection{from:index,to:target,side:true});sides[side]+=diagram.cards[target].h+42.;
    }
@@ -43,11 +61,12 @@ struct Location{source:String,camera:Point<Pixels>,zoom:f32,selected:Option<Stri
 fn has_flow(flows:&[Flow],source:Option<&str>)->bool{source.is_some_and(|source|flows.iter().any(|f|f.source==source))}
 fn restore(history:&mut Vec<Location>,index:usize)->Option<Location>{let location=history.get(index)?.clone();history.truncate(index);Some(location)}
 pub(crate) struct FlowCanvas{
- owner:WeakEntity<Studio>,graph:Option<Graph>,revision:u64,root:Option<String>,history:Vec<Location>,diagram:Diagram,selected:Option<String>,trace:HashMap<String,crate::ui::pi_trace::State>,
+ git:Option<std::sync::Arc<crate::git_diff::Snapshot>>,
+ owner:WeakEntity<Studio>,graph:Option<Graph>,revision:u64,root:Option<String>,history:Vec<Location>,diagram:Diagram,selected:Option<String>,trace:HashMap<String,State>,stage_events:HashMap<(String,String),State>,metrics:HashMap<(String,String),String>,
  camera:Point<Pixels>,zoom:f32,pan:Option<(Point<Pixels>,Point<Pixels>)>,bounds:Rc<Cell<Bounds<Pixels>>>,center_pending:bool,
 }
 impl FlowCanvas{
- pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,trace:HashMap::new(),camera:Point::default(),zoom:0.65,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),center_pending:true}}
+ pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{git:None,owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,trace:HashMap::new(),stage_events:HashMap::new(),metrics:HashMap::new(),camera:Point::default(),zoom:0.65,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),center_pending:true}}
  pub(super) fn sync(&mut self,revision:u64,graph:&Graph,cx:&mut Context<Self>){
   if self.revision==revision{return;}let workspace_changed=self.graph.as_ref().is_none_or(|old|old.root!=graph.root);
   self.graph=Some(graph.clone());self.revision=revision;
@@ -55,7 +74,8 @@ impl FlowCanvas{
   if !has_flow(&graph.flows,self.root.as_deref()){self.root=graph.flows.iter().find(|f|f.entry).map(|f|f.source.clone());self.history.clear();self.center_pending=true;}
   self.rebuild();cx.notify();
  }
- pub(super) fn set_trace(&mut self,trace:HashMap<String,crate::ui::pi_trace::State>,cx:&mut Context<Self>){if self.trace!=trace{self.trace=trace;cx.notify();}}
+ pub(super) fn set_trace(&mut self,trace:HashMap<String,State>,events:HashMap<(String,String),State>,metrics:HashMap<(String,String),String>,cx:&mut Context<Self>){if self.trace!=trace||self.stage_events!=events||self.metrics!=metrics{self.trace=trace;self.stage_events=events;self.metrics=metrics;cx.notify();}}
+ pub(super) fn set_git(&mut self,git:Option<std::sync::Arc<crate::git_diff::Snapshot>>,cx:&mut Context<Self>){if !super::super::git_changes::same_snapshot(&self.git,&git){self.git=git;cx.notify();}}
  fn trace_state(&self,card:&Card)->Option<crate::ui::pi_trace::State>{
   if card.kind=="stage" {return None;}
   if card.kind=="call"&&self.diagram.cards.iter().filter(|c|c.kind=="call"&&c.source==card.source).count()!=1{return None;}
@@ -92,8 +112,19 @@ impl Render for FlowCanvas{
   let extent=self.bounds.get().size;
   if self.center_pending&&extent.width>px(0.){self.camera=point(extent.width*0.5-px(760.*self.zoom),px(22.));self.center_pending=false;}
   let z=self.zoom;let camera=self.camera;let bounds_cell=self.bounds.clone();let entity_id=cx.entity().entity_id();
-  let running=crate::ui::pi_trace::State::Running;
-  let pulse=if self.diagram.cards.iter().any(|card|self.trace_state(card)==Some(running)){
+  let mut stage_trace=self.diagram.stage_trace(&self.trace);
+  if let Some(flow)=self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|Some(&f.source)==self.root.as_ref())){
+   for (i,card) in self.diagram.cards.iter().enumerate().filter(|(_,c)|c.kind=="stage"){
+    if let Some(stage)=flow.stages.iter().find(|s|s.line==card.line){
+     if flow.stages.iter().filter(|s|s.title==stage.title).count()==1{
+      if let Some(&state)=self.stage_events.get(&(flow.source.clone(),stage.title.clone())){stage_trace.insert(i,state);}
+     }
+    }
+   }
+  }
+  let states:Vec<_>=self.diagram.cards.iter().enumerate().map(|(i,card)|stage_trace.get(&i).copied().or_else(||self.trace_state(card))).collect();
+  let running=State::Running;
+  let pulse=if states.contains(&Some(running)){
    window.request_animation_frame();
    use std::sync::OnceLock;
    static START:OnceLock<std::time::Instant>=OnceLock::new();
@@ -113,7 +144,7 @@ impl Render for FlowCanvas{
   for(i,card)in self.diagram.cards.iter().enumerate(){
    let color=match card.kind{"main"=>0xb5a2ce,"subroot"|"call"=>0x62c7c7,_=>0x4ea1ff};
    let (label,glyph)=match card.kind{"main"=>("MAIN SKILL",Icon::Skill),"subroot"=>("SUBFLOW ROOT",Icon::Skill),"call"=>("SUBFLOW",Icon::Branch),_=>("PHASE / STEP",Icon::Layers)};
-   let runtime=self.trace_state(card);let selected=self.selected.as_deref()==Some(card.id.as_str());let border=runtime.map(runtime_color).unwrap_or(if selected{visual::INCOMING}else{BORDER});
+   let runtime=states[i];let selected=self.selected.as_deref()==Some(card.id.as_str());let border=runtime.map(runtime_color).unwrap_or(if selected{visual::INCOMING}else{BORDER});
    let path=card.source.clone();let line=card.line;let click_path=card.source.clone();let click_line=card.line;let is_call=card.kind=="call";
    let select_id=card.id.clone();let source_id=card.id.clone();
    let filename=card.source.rsplit('/').next().unwrap_or(&card.source).to_string();
@@ -139,7 +170,7 @@ impl Render for FlowCanvas{
     .child(div().flex_1().min_h(px(0.)).px(px(15.*z)).py(px(11.*z)).flex().flex_col().gap(px(5.*z))
      .child(div().h(px(18.*z)).flex_none().flex().items_center().justify_between().line_height(px((13.*z).max(10.)))
       .child(div().flex().items_center().gap(px(5.*z)).text_color(rgb(color)).text_size(px((10.*z).max(8.))).font_weight(FontWeight::SEMIBOLD)
-       .child(icon(glyph).size(px((13.*z).max(9.))).text_color(rgb(color))).child(if runtime==Some(crate::ui::pi_trace::State::Running){"● RUNNING"}else{label}))
+       .child(icon(glyph).size(px((13.*z).max(9.))).text_color(rgb(color))).child(if runtime==Some(crate::ui::pi_trace::State::Running){"● RUNNING"}else if runtime==Some(State::Skipped){"SKIPPED"}else{label}))
       .child(div().text_size(px((10.*z).max(8.))).text_color(rgb(if selected{visual::INCOMING}else{DIM})).child(if selected{"SELECTED".into()}else{format!("L{}",card.line)})))
      .child(div().h(px(if compact{45.*z}else{44.*z})).flex_none().overflow_hidden().text_size(px((16.*z).max(8.))).line_height(px((21.*z).max(10.))).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(card.title.clone()))
      .children((!compact).then(||{
@@ -180,7 +211,33 @@ impl Render for FlowCanvas{
       let opened=this.source(click_path.clone(),click_line,w,cx);
       if opened&&is_call&&event.click_count()>1{this.enter(&click_path,cx);}
     }));
+   if let Some(file)=self.git.as_ref().and_then(|files|files.get(&card.source)){
+    let change=if card.kind=="stage"{
+     let next=self.diagram.cards.iter().filter(|c|c.kind=="stage"&&c.line>card.line).map(|c|c.line).min().unwrap_or(usize::MAX);
+     match file.change{
+      Some(crate::git_diff::Change::Added)=>file.change,
+      _=>file.lines.iter().find(|&&(line,count,_)|line<next&&line.saturating_add(count.max(1))>card.line)
+       .map(|&(line,count,c)|if c==crate::git_diff::Change::Added&&line<=card.line&&line.saturating_add(count)>card.line{c}else{crate::git_diff::Change::Modified})
+     }
+    }else{file.change};
+    if let Some(change)=change{content=content.child(super::super::git_changes::outline(camera.x+px(card.x*z),camera.y+px(card.y*z),px(CARD_W*z),px(card.h*z),change));}
+   }
    content=content.child(card_view);
+   if runtime.is_some()&&!compact{
+    let heading=if card.kind=="stage"{self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|f.source==card.source)).and_then(|f|f.stages.iter().find(|s|s.line==card.line)).map(|s|s.title.clone()).unwrap_or_default()}else{String::new()};
+    if let Some(value)=self.metrics.get(&(card.source.clone(),heading)){
+     let left=card.kind=="call"&&card.x<600.;
+     let width=px((222.*z).max(150.));
+     let x=if left{camera.x+px(card.x*z)-width-px(16.)}else{camera.x+px((card.x+CARD_W)*z)+px(16.)};
+     content=content.child(div().absolute().left(x).top(camera.y+px((card.y+14.)*z)).w(width)
+      .flex().flex_col().gap(px(2.)).text_size(px((12.*z).max(9.))).line_height(px((16.*z).max(12.)))
+      .children(["Time","Tokens","CTX"].into_iter().zip(value.lines()).map(|(label,value)|{
+       div().flex().items_baseline().gap(px(8.)).whitespace_nowrap()
+        .child(div().w(px((56.*z).max(40.))).flex_none().text_color(rgb(MUTED)).child(label))
+        .child(div().flex_none().text_color(rgb(TEXT)).child(value.to_owned()))
+      })));
+    }
+   }
   }
   if self.diagram.cards.is_empty(){content=content.child(div().size_full().flex().items_center().justify_center().text_color(rgb(MUTED)).child("No SKILL.md entry found. Switch to References or open a Skill workspace."));}
   let mut choices=div().flex().items_center().gap(px(5.)).overflow_hidden();
@@ -212,6 +269,25 @@ impl Render for FlowCanvas{
    .child(view)
  }
 }
+#[cfg(test)]
+mod stage_trace_tests{
+ use super::{Diagram, Connection, State, HashMap};
+ #[test]
+ fn stage_highlights_require_unique_call_evidence(){
+  let graph=crate::core::open_workspace(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/skillrider-smoke").as_path()).unwrap();
+  let root=graph.flows.iter().find(|flow|flow.entry).unwrap();
+  let mut diagram=Diagram::build(&graph.flows,root);
+  let observed=HashMap::from([("SKILL.md".into(),State::Done),("references/checklist.md".into(),State::Done),("references/nested.md".into(),State::Running),("references/error-target.md".into(),State::Failed)]);
+  let stage:Vec<_>=diagram.cards.iter().enumerate().filter_map(|(i,c)|(c.kind=="stage").then_some(i)).collect();
+  let states=diagram.stage_trace(&observed);
+  assert_eq!(stage.iter().map(|i|states.get(i).copied()).collect::<Vec<_>>(),vec![Some(State::Done),Some(State::Running),Some(State::Failed),None,None,None]);
+  let target=diagram.edges.iter().find(|edge|edge.side&&edge.from==stage[0]).unwrap().to;
+  diagram.edges.push(Connection{from:stage[3],to:target,side:true});
+  let states=diagram.stage_trace(&observed);
+  assert!(!states.contains_key(&stage[0])&&!states.contains_key(&stage[3]));
+ }
+}
+
 #[cfg(test)]mod tests{
  use super::*;
  fn flows()->Vec<Flow>{
