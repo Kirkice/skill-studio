@@ -1,6 +1,16 @@
-# SkillRider
+<p align="center"><img src="gpui/assets/icon.png" width="104" alt="Skill Studio 图标"></p>
 
-SkillRider 是一个用 Rust 和 GPUI 构建的本地桌面工作台，用来编写、阅读和检查以 `SKILL.md` 为入口的技能工作区。你可以从入口文档顺着引用打开子文档和脚本，定位断链与循环引用，再用 Pi Trace 对照实际运行中发生的工具调用。
+<h1 align="center">Skill Studio</h1>
+
+<p align="center">编写 Skill、梳理引用、观察实际运行的本地桌面工作台</p>
+
+Skill Studio 是一个用 Rust 和 GPUI 构建的本地桌面工作台，用来编写、阅读和检查以 `SKILL.md` 为入口的技能工作区。你可以从入口文档顺着引用打开子文档和脚本，定位断链与循环引用，再用 Pi Trace 对照实际运行中发生的工具调用。
+
+![Skill Studio 工作台：左侧文件树、中间流程与静态诊断、右侧源码和 Pi 终端](docs/screenshots/workbench.png)
+
+*Windows 最大化实测：使用仓库自带的冒烟示例，观察阶段高亮、源码定位与 Problems 诊断。*
+
+> `SkillRider` 是本地检出目录名；项目和应用名称为 **Skill Studio**。
 
 ## 快速开始
 
@@ -9,6 +19,8 @@ SkillRider 是一个用 Rust 和 GPUI 构建的本地桌面工作台，用来编
 ```sh
 cargo run --release --locked
 ```
+
+Windows 上若要体验内置终端或 Pi Trace，请先运行 `python tools/prepare_conpty.py --profile release`。运行构建产物时，`conpty.dll` 和 `OpenConsole.exe` 须与 EXE 同目录。
 
 启动后选择 **Open workspace**，打开 [`examples/skillrider-smoke`](examples/skillrider-smoke)。这个示例包含嵌套引用、缺失目标和未引用文件，适合快速体验：
 
@@ -33,11 +45,25 @@ cargo run --release --locked
 
 编辑器支持语法高亮、行号和自动换行；可在设置中调整主题、强调色、编辑器字号、终端字号与行高。
 
+## 实测：用 Debug 观察一个 Skill
+
+1. 打开 [`examples/skillrider-smoke`](examples/skillrider-smoke)，点击左侧 **Debug**。
+2. 将底部 **Copy** 提供的启动命令粘贴到内置终端并执行。等待 `Pi terminal connected` 后，发送：「请使用当前目录的 `SKILL.md` 运行只读冒烟测试，不要修改文件。」
+3. 在流程图观察实际运行状态。蓝色为正在运行，绿色为成功，红色为失败，琥珀色为跳过。卡片侧面显示可用的耗时、Token 和上下文估算。**Git Diff 的虚线外框独立于运行状态。**
+4. 点击终端底部的 **Pi Trace** 打开独立详情窗口，查看工具调用、阶段报告和模型用量。
+
+![独立 Pi Trace 窗口：工具调用结果、耗时、阶段报告和模型用量](docs/screenshots/pi-trace.png)
+
+截图来自真实 Pi 会话：读取直接与嵌套引用成功，故意超出行数的读取失败，备用分支按要求跳过。Problems 另行报告示例中的失效链接和孤立文档。
+
+普通终端中已启动的 Pi 不会自动接入。需要指定本机 Pi 启动器时，可在启动 Skill Studio 前设置 `SKILLRIDER_PI_LAUNCHER`。显式阶段报告由 `skillrider_stage` 提供；未接入协议的 Skill 仍可按文件调用证据显示高亮，但不能确认整个阶段已完成。
+
 ## 使用边界
 
 - **流程图是对文档的解读，不是执行引擎。** 它不运行步骤，不强制执行文档中的确认要求，也不会调用模型补全信息。
 - **Problems 是静态检查。** 未被索引到引用不代表文件无用，未识别到触发条件也不代表原文没有描述；检查不会验证脚本或 Skill 的实际行为。
-- **Pi Trace 只展示收到的运行事件。** 图谱中的运行标记依赖路径和调用证据，不保证每次工具调用都能对应到一个文档步骤。
+- **Pi Trace 只展示收到的运行事件。** 图谱中的运行标记来自显式阶段报告或文件调用证据；不是每次调用都能对应到一个文档步骤。上下文 MB 为按 Token 换算的估算值，不是实际内存占用。
+- **关闭主窗口不会弹确认框，也不会自动保存编辑。** 退出前请先保存需要保留的修改。
 - 文本编辑限 UTF-8，单个文本文件上限约 2 MB；动画图片只预览首帧。不内嵌预览 PDF、Office 文档和压缩包。Markdown 预览只解析工作区内的本地资源。
 
 ## 快捷键
