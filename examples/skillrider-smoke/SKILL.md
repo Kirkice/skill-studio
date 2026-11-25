@@ -13,7 +13,7 @@ description: 当用户明确要求运行 SkillRider 冒烟测试时使用，验�
 
 用 Pi 的 `read` 工具读取 [检查清单](references/checklist.md)，记录返回的标记。不要改用 Shell。
 
-## Step 2：验证间接引用
+## Step 2：验证间接引用  
 
 按照检查清单中的链接，用 `read` 工具读取 [间接引用样本](references/nested.md)。这条链接也标明本阶段对应的调用证据。不要跳过这一步。
 

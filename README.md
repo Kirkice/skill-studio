@@ -45,6 +45,24 @@ Windows 上若要体验内置终端或 Pi Trace，请先运行 `python tools/pre
 
 编辑器支持语法高亮、行号和自动换行；可在设置中调整主题、强调色、编辑器字号、终端字号与行高。
 
+### 流程图与源码
+
+![左侧文件树、中间 Skill 阶段流程、右侧 Markdown 源码](docs/screenshots/flow-and-source.jpeg)
+
+### 依赖图与 Markdown 预览
+
+![依赖图展示 Skill 引用，右侧显示 Markdown 渲染预览](docs/screenshots/reference-graph-preview.jpeg)
+
+### Problems 与内置终端
+
+![依赖图下方显示静态诊断，右侧可同时查看源码和终端](docs/screenshots/problems-and-terminal.jpeg)
+
+### 命令面板与设置
+
+![命令面板：搜索工作区、文档和布局操作](docs/screenshots/command-palette.jpeg)
+
+![设置面板：主题、强调色和编辑器偏好](docs/screenshots/editor-settings.jpeg)
+
 ## 实测：用 Debug 观察一个 Skill
 
 1. 打开 [`examples/skillrider-smoke`](examples/skillrider-smoke)，点击左侧 **Debug**。
