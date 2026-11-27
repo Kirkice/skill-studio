@@ -5,7 +5,7 @@ pub(crate) mod graph;
 mod settings;
 mod preview;
 mod chrome;
-mod explorer;
+pub(crate) mod explorer;
 mod file_preview;
 pub(crate) mod terminal;
 pub(crate) mod pi_trace;
@@ -267,12 +267,11 @@ impl Render for Studio {
                 .children(root.map(|path|div().id("status-workspace-path").max_w(relative(0.45)).min_w(px(0.)).truncate().text_size(px(11.5)).text_color(rgb(DIM)).child(path.clone())
                     .tooltip(move|_,cx|cx.new(|_|Hint(path.clone())).into())))
                 .child(caption(if self.watcher.is_some(){"Live index · Local first"}else{"Local first · Explicit terminal"})))
-            .children(self.dragging_external.then(||div().id("external-drop-target").absolute().inset_0().occlude()
-                .on_drop(cx.listener(|this,paths:&ExternalPaths,w,cx|{cx.stop_propagation();this.open_external(paths.paths().to_vec(),w,cx);}))
-                .bg(rgba(0x101a2ba8)).flex().items_center().justify_center()
+            .children((self.dragging_external&&cx.has_active_drag()).then(||div().absolute().inset_0()
+                .border_2().border_color(rgb(ACCENT)).flex().items_center().justify_center()
                 .child(div().mx(px(20.)).p(px(28.)).rounded(px(14.)).border_1().border_color(rgb(ACCENT)).bg(rgb(POPOVER)).shadow_lg().flex().flex_col().items_center().gap(px(12.))
                     .child(icon(Icon::FolderOpen).size(px(36.)).text_color(rgb(ACCENT)))
-                    .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child("拖入文件或文件夹"))
+                    .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child("松开鼠标以打开文件或文件夹"))
                     .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child("文件夹打开工作区 · 文件按内容类型打开"))
                     .child(div().text_size(px(11.)).text_color(rgb(GREEN)).child("只打开 · 不复制 · 不自动执行")))))
             .children(overlay)

@@ -115,7 +115,9 @@ impl Studio{
             cx.observe(&editor,move|this,editor,cx|{let cursor=editor.read(cx).cursor_position();if cursor!=last_cursor{last_cursor=cursor;if this.selected.as_deref()==Some(&observed_id){cx.notify();}}}).detach();
         }
         if let Some(graph)=&mut self.graph{if !graph.entries.iter().any(|e|e.id==id){graph.entries.push(core::WorkspaceEntry{id:id.clone(),directory:false});self.graph_revision+=1;}}
+        let keep_explorer_focus=self.explorer_focus.is_focused(window);
         self.activate_tab(&id,window,cx);
+        if keep_explorer_focus{self.explorer_focus.focus(window,cx);}
         self.status=if editable{format!("Opened {id} · UTF-8 source")}else{format!("Opened {id} · read-only preview")};self.jump_open_line(line,window,cx);cx.notify();
     }
 }

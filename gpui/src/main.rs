@@ -15,6 +15,7 @@ mod meaning;
 mod panes;
 mod explorer;
 mod files;
+mod file_ops;
 mod opening;
 mod terminal;
 mod diagnostics;
@@ -23,7 +24,7 @@ use gpui::*;
 use gpui_base::input::{EditorState, InputState, InputEvent};
 actions!(studio, [TogglePalette, SaveDocument, CloseOverlay, FindDocument, CloseDocument, TogglePreview, ToggleTerminal]);
 
-struct Studio { git:ui::git_changes::GitChanges, terminal:Entity<ui::terminal::TerminalView>,pi_trace:Entity<ui::pi_trace::PiTraceView>,terminal_visible:bool,problems_visible:bool,pi_trace_visible:bool,diagnostics:Vec<diagnostics::Diagnostic>,terminal_maximized:bool,terminal_height:f32,problems_height:f32,terminal_drag:Option<terminal::DockDrag>,closing_pending:bool, explorer_visible:bool, explorer_menu:Option<explorer::ContextMenu>, open_ticket:u64, workspace_file:Option<String>, dragging_external:bool, explorer:explorer::Explorer, panes:panes::Panes, flow_canvas:Option<Entity<ui::graph::flow::FlowCanvas>>, flow_mode:bool, documents:documents::Documents<Entity<EditorState>>, graph_canvas: Option<Entity<ui::graph::GraphCanvas>>, graph_revision: u64, saving: bool, refreshing: bool, refresh_pending: bool, find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, zoom: f32, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
+struct Studio { git:ui::git_changes::GitChanges, terminal:Entity<ui::terminal::TerminalView>,pi_trace:Entity<ui::pi_trace::PiTraceView>,terminal_visible:bool,problems_visible:bool,problem_filters:[bool;3],pi_trace_visible:bool,diagnostics:Vec<diagnostics::Diagnostic>,terminal_maximized:bool,terminal_height:f32,problems_height:f32,terminal_drag:Option<terminal::DockDrag>,closing_pending:bool, explorer_visible:bool, explorer_menu:Option<explorer::ContextMenu>, explorer_focus:FocusHandle, explorer_selection:Option<String>, explorer_copy:Option<(String,String)>, explorer_rename:Option<(String,String)>, open_ticket:u64, workspace_file:Option<String>, dragging_external:bool, explorer:explorer::Explorer, panes:panes::Panes, flow_canvas:Option<Entity<ui::graph::flow::FlowCanvas>>, flow_mode:bool, documents:documents::Documents<Entity<EditorState>>, graph_canvas: Option<Entity<ui::graph::GraphCanvas>>, graph_revision: u64, saving: bool, refreshing: bool, refresh_pending: bool, find_open: bool, find_query: Entity<InputState>, replace_query: Entity<InputState>, preferences: settings::Settings, settings_open: bool, focus_handle: FocusHandle, graph: Option<core::Graph>, selected: Option<String>, editor: Entity<EditorState>, original: String, status: String, conflict: bool, generation: u64, watcher: Option<notify::RecommendedWatcher>, positions: layout::Positions, roles: layout::Roles, zoom: f32, palette: bool, palette_index: usize, role_menu: bool, document_menu: bool, command_search: Entity<InputState>, search: Entity<InputState>, skill_name: Entity<InputState>, creating: bool, scope: filter::Scope, focus: bool, show_missing: bool }
 impl Studio {
     fn toggle_terminal(&mut self,window:&mut Window,cx:&mut Context<Self>){
         if !self.composition_ready(window,cx){return;}
@@ -249,6 +250,7 @@ impl Studio {
         cx.notify();
     }
     fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_rename.take().is_some(){self.skill_name.update(cx,|input,cx|input.set_value("",window,cx));self.explorer_focus.focus(window,cx);cx.notify();return;}
         if self.explorer_menu.is_some(){self.close_explorer_menu(window,cx);return;}
         self.palette=false; self.creating=false; self.role_menu=false; self.document_menu=false; self.settings_open=false;
         if let Some(canvas)=&self.graph_canvas{canvas.update(cx,|canvas,cx|canvas.close_reference_menu(cx));}
@@ -432,6 +434,7 @@ fn main() {
     gpui_platform::application().with_assets(ui::icons::Assets).run(move |cx| {
         gpui_base::init(cx);
         ui::terminal::bind_keys(cx);
+        ui::explorer::bind_keys(cx);
         let loaded=settings::load();
         let mut settings_warning=loaded.as_ref().err().map(|e|format!("Settings could not be loaded: {e}"));
         let mut preferences=loaded.unwrap_or_default();
@@ -473,7 +476,7 @@ fn main() {
                         ui::terminal::TerminalEvent::LineHeight(height)=>{this.preferences.terminal_line_height=*height;if let Err(e)=settings::save(&this.preferences){this.status=format!("Unable to save terminal preferences: {e}");}},
                     }cx.notify();
                 }).detach();
-                Studio { git:Default::default(), terminal,pi_trace,terminal_visible:false,problems_visible:false,pi_trace_visible:false,diagnostics:vec![],terminal_maximized:false,terminal_height:320.,problems_height:220.,terminal_drag:None,closing_pending:false, explorer_visible:true, explorer_menu:None, open_ticket:0, workspace_file:None, dragging_external:false, explorer:Default::default(), panes:Default::default(), flow_canvas:None, flow_mode:true, documents:Default::default(), graph_canvas: None, graph_revision: 0, saving: false, refreshing: false, refresh_pending: false, find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), zoom: 1., palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
+                Studio { git:Default::default(), terminal,pi_trace,terminal_visible:false,problems_visible:false,problem_filters:[true;3],pi_trace_visible:false,diagnostics:vec![],terminal_maximized:false,terminal_height:320.,problems_height:220.,terminal_drag:None,closing_pending:false, explorer_visible:true, explorer_menu:None, explorer_focus:cx.focus_handle(), explorer_selection:None, explorer_copy:None, explorer_rename:None, open_ticket:0, workspace_file:None, dragging_external:false, explorer:Default::default(), panes:Default::default(), flow_canvas:None, flow_mode:true, documents:Default::default(), graph_canvas: None, graph_revision: 0, saving: false, refreshing: false, refresh_pending: false, find_open: false, find_query, replace_query, preferences, settings_open: false, focus_handle: cx.focus_handle(), graph: None, selected: None, editor, original: String::new(), status: settings_warning.unwrap_or_else(||"Ready".into()), conflict: false, generation: 0, watcher: None, positions: layout::Positions::new(), roles: layout::Roles::new(), zoom: 1., palette: false, palette_index: 0, role_menu: false, document_menu: false, command_search, search, skill_name, creating: false, scope: filter::Scope::Direct, focus: false, show_missing: false }
             });
             studio.read(cx).focus_handle.clone().focus(window, cx);
             if let Some(path)=&initial_workspace {
