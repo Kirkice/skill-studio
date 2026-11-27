@@ -11,6 +11,15 @@ fn heat_color(tokens:usize,is_doc:bool)->u32{
 }
 fn fmt_tok(t:usize)->String{if t>=1000{format!("{:.1}k tok",t as f32/1000.)}else{format!("{t} tok")}}
 fn fmt_num(t:usize)->String{if t>=1000{format!("{:.1}k",t as f32/1000.)}else{t.to_string()}}
+fn fmt_delta(current:usize,head:usize)->Option<(String,u32)>{
+ let diff=current as isize-head as isize;
+ if diff==0{return None;}
+ let abs=diff.unsigned_abs();
+ let sign=if diff>0{"+"}else{"-"};
+ let pct=if head>0{format!(" {:.0}%",(diff.abs() as f32/head as f32)*100.)}else{String::new()};
+ let color=if diff<0{0x42b883}else{0xe5a54b};
+ Some((format!("{sign}{}{pct}",fmt_num(abs)),color))
+}
 #[derive(Clone)]
 struct Card{
  id:String,title:String,source:String,line:usize,x:f32,y:f32,h:f32,kind:&'static str,
@@ -106,11 +115,11 @@ fn has_flow(flows:&[Flow],source:Option<&str>)->bool{source.is_some_and(|source|
 fn restore(history:&mut Vec<Location>,index:usize)->Option<Location>{let location=history.get(index)?.clone();history.truncate(index);Some(location)}
 pub(crate) struct FlowCanvas{
  git:Option<std::sync::Arc<crate::git_diff::Snapshot>>,
- owner:WeakEntity<Studio>,graph:Option<Graph>,revision:u64,root:Option<String>,history:Vec<Location>,diagram:Diagram,selected:Option<String>,trace:HashMap<String,State>,stage_events:HashMap<(String,String),State>,metrics:HashMap<(String,String),String>,
+ owner:WeakEntity<Studio>,graph:Option<Graph>,revision:u64,root:Option<String>,history:Vec<Location>,diagram:Diagram,selected:Option<String>,trace:HashMap<String,State>,stage_events:HashMap<(String,String),State>,metrics:HashMap<(String,String),String>,tool_failed:bool,
  camera:Point<Pixels>,zoom:f32,pan:Option<(Point<Pixels>,Point<Pixels>)>,bounds:Rc<Cell<Bounds<Pixels>>>,last_width:Pixels,center_pending:bool,
 }
 impl FlowCanvas{
- pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{git:None,owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,trace:HashMap::new(),stage_events:HashMap::new(),metrics:HashMap::new(),camera:Point::default(),zoom:0.78,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),last_width:px(0.),center_pending:true}}
+ pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{git:None,owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,trace:HashMap::new(),stage_events:HashMap::new(),metrics:HashMap::new(),tool_failed:false,camera:Point::default(),zoom:0.78,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),last_width:px(0.),center_pending:true}}
  pub(super) fn sync(&mut self,revision:u64,graph:&Graph,cx:&mut Context<Self>){
   if self.revision==revision{return;}let workspace_changed=self.graph.as_ref().is_none_or(|old|old.root!=graph.root);
   self.graph=Some(graph.clone());self.revision=revision;
@@ -118,7 +127,7 @@ impl FlowCanvas{
   if !has_flow(&graph.flows,self.root.as_deref()){self.root=graph.flows.iter().find(|f|f.entry).map(|f|f.source.clone());self.history.clear();self.center_pending=true;}
   self.rebuild();cx.notify();
  }
- pub(super) fn set_trace(&mut self,trace:HashMap<String,State>,events:HashMap<(String,String),State>,metrics:HashMap<(String,String),String>,cx:&mut Context<Self>){if self.trace!=trace||self.stage_events!=events||self.metrics!=metrics{self.trace=trace;self.stage_events=events;self.metrics=metrics;cx.notify();}}
+ pub(super) fn set_trace(&mut self,trace:HashMap<String,State>,events:HashMap<(String,String),State>,metrics:HashMap<(String,String),String>,failed:bool,cx:&mut Context<Self>){if self.trace!=trace||self.stage_events!=events||self.metrics!=metrics||self.tool_failed!=failed{self.trace=trace;self.stage_events=events;self.metrics=metrics;self.tool_failed=failed;cx.notify();}}
  pub(super) fn set_git(&mut self,git:Option<std::sync::Arc<crate::git_diff::Snapshot>>,cx:&mut Context<Self>){if !super::super::git_changes::same_snapshot(&self.git,&git){self.git=git;cx.notify();}}
  fn trace_state(&self,card:&Card)->Option<crate::ui::pi_trace::State>{
   if card.kind=="stage" {return None;}
@@ -132,6 +141,9 @@ impl FlowCanvas{
    owner.reference(path.clone(),line,window,cx);
    true // Accepted; disk loading and source-line navigation complete asynchronously.
   }).unwrap_or(false)
+ }
+ fn dispatch_pi(&self,prompt:String,window:&mut Window,cx:&mut Context<Self>){
+  let _=self.owner.update(cx,|owner,cx|owner.dispatch_to_pi(prompt,window,cx));
  }
  fn enter(&mut self,target:&str,cx:&mut Context<Self>){
   if self.root.as_deref()==Some(target)||!self.graph.as_ref().is_some_and(|g|has_flow(&g.flows,Some(target))){return;}
@@ -245,13 +257,39 @@ impl Render for FlowCanvas{
     _=>if card.explicit{("STEP",Icon::Layers)}else{("SECTION",Icon::Layers)},
    };
    let runtime=states[i];let selected=self.selected.as_deref()==Some(card.id.as_str());
+   let missed_ref=self.tool_failed&&card.kind=="call"&&runtime.is_none();
    let heavy=(!is_doc&&card.tokens>600)||(is_doc&&card.tokens>2000);
    let heat_border=if card.tokens>0{visual::tint(color,if heavy{0.68}else{0.26})}else{rgb(BORDER)};
-   let border_rgba=runtime.map(|s|rgb(runtime_color(s))).unwrap_or(if selected{rgb(visual::INCOMING)}else{heat_border});
+   let border_rgba=if missed_ref{rgb(0xe5a54b)}else{runtime.map(|s|rgb(runtime_color(s))).unwrap_or(if selected{rgb(visual::INCOMING)}else{heat_border})};
    let (path,line)=if card.kind=="tool"&&(card.source.starts_with("cli:")||card.source.starts_with("mcp:")){card.evidence.clone().unwrap_or((card.source.clone(),card.line))}else{(card.source.clone(),card.line.max(1))};let click_path=path.clone();let click_line=line;let is_call=card.kind=="call";
    let select_id=card.id.clone();let source_id=card.id.clone();
    let filename=card.source.rsplit('/').next().unwrap_or(&card.source).to_string();
    let mut actions=div().flex_none().flex().items_center().gap(px(5.*z)).font_family(MONO_FONT);
+   if missed_ref{
+    let miss_src=card.source.clone();let miss_ev=card.evidence.clone().unwrap_or((card.source.clone(),card.line.max(1)));
+    actions=actions.child(div().id(("flow-missed-ref",i)).px(px(6.5*z)).py(px(1.5*z)).rounded(px(999.)).bg(visual::tint(0xe5a54b,0.18)).border_1().border_color(visual::tint(0xe5a54b,0.45)).text_size(px(9.5*z)).line_height(px(13.*z)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(0xe5a54b)).cursor(CursorStyle::PointingHand).hover(|s|s.bg(visual::tint(0xe5a54b,0.3)).border_color(rgb(0xe5a54b)).text_color(rgb(TEXT))).child(crate::i18n::text("⚠ Missed · Fix"))
+     .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
+     .on_click(cx.listener(move|this,_,w,cx|{
+      cx.stop_propagation();
+      let prompt=format!("During the last Pi run, a tool call failed while reference `{miss_src}` (linked at `{}:{}`) was never read. Strengthen the routing condition at `{}:{}` so the agent explicitly reads `{miss_src}` before executing the corresponding command/tool.",miss_ev.0,miss_ev.1,miss_ev.0,miss_ev.1);
+      this.dispatch_pi(prompt,w,cx);
+     })));
+   }
+   if (card.kind=="stage"&&card.tokens>=350&&card.line>0)||(card.kind=="main"&&card.tokens>2000){
+    let slim_src=card.source.clone();let slim_title=card.title.clone();let slim_line=card.line.max(1);let slim_tok=card.tokens;let slim_share=(card.share*100.).round() as usize;let is_main=card.kind=="main";
+    let slim_label=if is_main{crate::i18n::text("✦ Slim Skill")}else{crate::i18n::text("✦ Slim")};
+    actions=actions.child(div().id(("flow-slim-pi",i)).px(px(6.5*z)).py(px(1.5*z)).rounded(px(999.)).bg(visual::tint(color,0.16)).border_1().border_color(visual::tint(color,0.42)).text_size(px(9.5*z)).line_height(px(13.*z)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(color)).cursor(CursorStyle::PointingHand).hover(|s|s.bg(visual::tint(color,0.28)).border_color(rgb(color)).text_color(rgb(TEXT))).child(slim_label)
+     .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
+     .on_click(cx.listener(move|this,_,w,cx|{
+      cx.stop_propagation();
+      let prompt=if is_main{
+       format!("Slim entry Skill `{slim_src}` (~{slim_tok} tokens): identify the heaviest inline sections, extract detailed reference tables/examples/edge-cases into `references/*.md`, and keep `{slim_src}` concise with clear progressive-disclosure links.")
+      }else{
+       format!("Refactor heavy section `## {slim_title}` in `{slim_src}` (around line {slim_line}, ~{slim_tok} tokens / {slim_share}% of document): extract detailed tables, examples, or long blocks into a dedicated `references/*.md` file and replace them in `{slim_src}` with a concise routing summary and Markdown link.")
+      };
+      this.dispatch_pi(prompt,w,cx);
+     })));
+   }
    if card.code_tokens>0&&card.kind=="stage"{
     actions=actions.child(div().px(px(5.5*z)).py(px(1.5*z)).rounded(px(4.*z)).bg(visual::tint(0xd6a875,0.13)).text_size(px(9.5*z)).line_height(px(13.*z)).text_color(rgb(0xd6a875)).child(format!("code {}",fmt_num(card.code_tokens))));
    }
@@ -284,7 +322,11 @@ impl Render for FlowCanvas{
     background.b+=(tint.b-background.b)*strength;
    }
    let (hero_val,hero_unit,sub_metric)=match card.kind{
-    "main"|"subroot"=>(fmt_num(card.tokens),"tok",if card.sub_tokens>0{format!("+{} lazy",fmt_num(card.sub_tokens))}else{"entry".into()}),
+    "main"|"subroot"=>{
+     let delta_str=self.git.as_ref().and_then(|files|files.get(&card.source)).and_then(|f|f.head_total_tokens).and_then(|h|fmt_delta(card.tokens,h)).map(|(d,_)|d);
+     let sub=if let Some(d)=delta_str{format!("Δ{d}")}else if card.sub_tokens>0{format!("+{} lazy",fmt_num(card.sub_tokens))}else{"entry".into()};
+     (fmt_num(card.tokens),"tok",sub)
+    },
     "call"=>(if card.tokens>0{format!("+{}",fmt_num(card.tokens))}else{format!("L{}",card.line)},if card.tokens>0{"tok"}else{""},if card.sub_tokens>0{format!("∑{}",fmt_num(card.tokens+card.sub_tokens))}else{String::new()}),
     "stage"=>(if card.tokens>0{fmt_num(card.tokens)}else{format!("L{}",card.line)},if card.tokens>0{"tok"}else{""},if card.tokens>0{format!("{:.0}%",card.share*100.)}else{String::new()}),
     _=>(format!("L{}",card.line),"",String::new()),
@@ -384,8 +426,11 @@ impl Render for FlowCanvas{
   }
   if self.diagram.cards.is_empty(){content=content.child(div().size_full().flex().items_center().justify_center().text_color(rgb(MUTED)).child(crate::i18n::text("No SKILL.md entry found. Switch to References or open a Skill workspace.")));}
   let entry_roots:Vec<_>=self.graph.as_ref().map(|g|g.flows.iter().filter(|f|f.entry).collect()).unwrap_or_default();
+  let catalog_l0_tokens:usize=entry_roots.iter().map(|r|r.frontmatter_tokens).sum();
   let mut nav_left=div().flex().items_center().gap(px(8.)).min_w(px(0.)).overflow_hidden();
   if entry_roots.len()>1{
+   let cat_color=if catalog_l0_tokens>1500{0xe06c75}else if catalog_l0_tokens>800{0xe5a54b}else{0x4ea1ff};
+   nav_left=nav_left.child(div().flex_none().h(px(26.)).px(px(8.)).rounded(px(5.)).bg(visual::tint(cat_color,0.13)).border_1().border_color(visual::tint(cat_color,0.3)).font_family(MONO_FONT).text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(cat_color)).flex().items_center().child(format!("∑{} skills · L0 {}",entry_roots.len(),fmt_tok(catalog_l0_tokens))));
    for(i,root)in entry_roots.iter().enumerate(){
     let id=root.source.clone();
     nav_left=nav_left.child(button(("flow-root",i),format!("{} ({})",root.title,fmt_tok(root.total_tokens)),Some(&id)==self.root.as_ref(),true).h(px(28.)).max_w(px(240.)).on_click(cx.listener(move|this,_,_,cx|{this.root=Some(id.clone());this.selected=None;this.history.clear();this.center_pending=true;this.rebuild();cx.notify();})));
@@ -402,10 +447,13 @@ impl Render for FlowCanvas{
    trail=trail.child(button(("flow-crumb",i),title,false,true).h(px(26.)).max_w(px(200.)).on_click(cx.listener(move|this,_,_,cx|this.go_back(i,cx)))).child(caption("›"));
   }
   if let Some(f)=&current_flow{
+   let head_tot=self.git.as_ref().and_then(|files|files.get(&f.source)).and_then(|g|g.head_total_tokens);
+   let tot_delta=head_tot.and_then(|h|fmt_delta(f.total_tokens,h));
    trail=trail.child(div().h(px(28.)).flex().items_center().gap(px(7.)).px(px(10.)).rounded(px(6.)).bg(rgb(RAISED)).border_1().border_color(rgb(BORDER))
     .child(icon(Icon::Skill).size(px(13.)).text_color(rgb(ACCENT)))
     .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(f.title.clone()))
-    .child(div().font_family(MONO_FONT).text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(rgb(ACCENT)).child(fmt_tok(f.total_tokens))));
+    .child(div().font_family(MONO_FONT).text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(rgb(ACCENT)).child(fmt_tok(f.total_tokens)))
+    .children(tot_delta.map(|(d,c)|div().px(px(5.5)).py(px(1.)).rounded(px(999.)).bg(visual::tint(c,0.15)).font_family(MONO_FONT).text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(c)).child(format!("HEAD {d}")))));
   }
   nav_left=nav_left.child(trail);
   let header_strip=if let Some(f)=&current_flow{
@@ -413,18 +461,30 @@ impl Render for FlowCanvas{
    let l1_color=heat_color(f.body_tokens,true);
    let total_reach=(f.total_tokens+f.ref_tokens).max(1);
    let deferred_pct=((f.ref_tokens as f32/total_reach as f32)*100.).round() as usize;
+   let git_file=self.git.as_ref().and_then(|files|files.get(&f.source));
+   let l0_delta=git_file.and_then(|g|g.head_frontmatter_tokens).and_then(|h|fmt_delta(f.frontmatter_tokens,h));
+   let l1_delta=git_file.and_then(|g|g.head_body_tokens).and_then(|h|fmt_delta(f.body_tokens,h));
    div().flex_none().h(px(42.)).px(px(14.)).bg(rgb(PANEL)).border_b_1().border_color(rgb(BORDER)).flex().items_center().justify_between().gap(px(12.))
     .child(nav_left)
     .child(div().flex_none().flex().items_center().gap(px(8.)).font_family(MONO_FONT).text_size(px(11.5))
-     .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(l0_color,0.13)).border_1().border_color(visual::tint(l0_color,0.28)).text_color(rgb(l0_color)).font_weight(FontWeight::SEMIBOLD).flex().items_center().child(format!("L0 {}",fmt_tok(f.frontmatter_tokens))))
-     .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(l1_color,0.13)).border_1().border_color(visual::tint(l1_color,0.28)).text_color(rgb(l1_color)).font_weight(FontWeight::SEMIBOLD).flex().items_center().child(format!("L1·{}s {}",f.stages.len(),fmt_tok(f.body_tokens))))
+     .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(l0_color,0.13)).border_1().border_color(visual::tint(l0_color,0.28)).text_color(rgb(l0_color)).font_weight(FontWeight::SEMIBOLD).flex().items_center().gap(px(5.))
+      .child(format!("L0 {}",fmt_tok(f.frontmatter_tokens)))
+      .children(l0_delta.map(|(d,c)|div().px(px(4.5)).rounded(px(999.)).bg(visual::tint(c,0.18)).text_size(px(10.)).text_color(rgb(c)).child(d))))
+     .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(l1_color,0.13)).border_1().border_color(visual::tint(l1_color,0.28)).text_color(rgb(l1_color)).font_weight(FontWeight::SEMIBOLD).flex().items_center().gap(px(5.))
+      .child(format!("L1·{}s {}",f.stages.len(),fmt_tok(f.body_tokens)))
+      .children(l1_delta.map(|(d,c)|div().px(px(4.5)).rounded(px(999.)).bg(visual::tint(c,0.18)).text_size(px(10.)).text_color(rgb(c)).child(d))))
      .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(0x62c7c7,0.13)).border_1().border_color(visual::tint(0x62c7c7,0.28)).text_color(rgb(0x62c7c7)).font_weight(FontWeight::SEMIBOLD).flex().items_center().child(format!("L2·{}r +{} ({deferred_pct}% lazy)",f.ref_files,fmt_num(f.ref_tokens))))
      .child(div().w(px(1.)).h(px(16.)).bg(rgb(BORDER)))
      .child(div().flex_none().flex().items_center().gap(px(8.)).font_family(UI_FONT).text_size(px(11.5)).text_color(rgb(MUTED))
       .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0x42b883))).child("Light"))
       .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0x4ea1ff))).child("Normal"))
       .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0xe5a54b))).child("Heavy"))
-      .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0xe06c75))).child("Bloated"))))
+      .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0xe06c75))).child("Bloated"))
+      .child(div().id("flow-eval-pi").ml(px(4.)).h(px(26.)).px(px(9.)).rounded(px(999.)).bg(visual::tint(ACCENT,0.14)).border_1().border_color(visual::tint(ACCENT,0.38)).font_family(MONO_FONT).text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(ACCENT)).flex().items_center().cursor(CursorStyle::PointingHand).hover(|s|s.bg(visual::tint(ACCENT,0.25)).border_color(rgb(ACCENT)).text_color(rgb(TEXT))).child(crate::i18n::text("▶ Eval with Pi"))
+       .on_click({let eval_src=f.source.clone();let eval_title=f.title.clone();cx.listener(move|this,_,w,cx|{
+        let prompt=format!("Dry-run and evaluate Skill `{eval_title}` (`{eval_src}`): read `{eval_src}`, simulate a realistic user request that triggers this skill, report each stage via `skillrider_stage`, verify whether linked reference files are read when needed, and summarize any context bloat or routing gaps.");
+        this.dispatch_pi(prompt,w,cx);
+       })}))))
   }else{
    div().flex_none().h(px(42.)).px(px(14.)).bg(rgb(PANEL)).border_b_1().border_color(rgb(BORDER)).flex().items_center().text_size(px(12.)).text_color(rgb(MUTED)).child(crate::i18n::text("Context Budget Map: inspect section token weights and progressive disclosure costs."))
   };

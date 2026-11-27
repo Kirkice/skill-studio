@@ -232,6 +232,11 @@ const STRINGS: &[(&str, &str)] = &[
         "Source unchanged · No transcoding or execution",
         "源文件未修改 · 未自动转码 · 不会自动执行",
     ),
+    ("✦ Slim", "✦ 瘦身"),
+    ("✦ Slim Skill", "✦ 精简 Skill"),
+    ("✦ Fix with Pi", "✦ Pi 修复"),
+    ("▶ Eval with Pi", "▶ Pi 评测"),
+    ("⚠ Missed · Fix", "⚠ 漏读 · 修复"),
 ];
 #[cfg(test)]
 mod tests {

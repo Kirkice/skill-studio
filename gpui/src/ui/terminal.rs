@@ -39,10 +39,11 @@ impl Grid{
 pub struct TerminalView{
     pub focus:FocusHandle,grid:Rc<RefCell<Grid>>,session:Option<Arc<Session>>,reader:Option<Task<()>>,
     pub cwd:Option<PathBuf>,next_cwd:Option<PathBuf>,label:String,status:String,starting:bool,generation:u64,confirming:bool,menu:bool,maximized:bool,notice:bool,
+    pending_input:Option<String>,
 }
 impl EventEmitter<TerminalEvent> for TerminalView{}
 impl TerminalView{
-    pub fn new(font_size:u16,line_height:f32,cx:&mut Context<Self>)->Self{let mut grid=Grid::new();grid.font_size=font_size as f32;grid.line_height=line_height;Self{focus:cx.focus_handle(),grid:Rc::new(RefCell::new(grid)),session:None,reader:None,cwd:None,next_cwd:dirs::home_dir(),label:"Terminal".into(),status:"Click start to open a local shell".into(),starting:false,generation:0,confirming:false,menu:false,maximized:false,notice:false}}
+    pub fn new(font_size:u16,line_height:f32,cx:&mut Context<Self>)->Self{let mut grid=Grid::new();grid.font_size=font_size as f32;grid.line_height=line_height;Self{focus:cx.focus_handle(),grid:Rc::new(RefCell::new(grid)),session:None,reader:None,cwd:None,next_cwd:dirs::home_dir(),label:"Terminal".into(),status:"Click start to open a local shell".into(),starting:false,generation:0,confirming:false,menu:false,maximized:false,notice:false,pending_input:None}}
     pub fn target_directory(&mut self,cwd:PathBuf){self.next_cwd=Some(cwd);}
     pub fn restore_document(&mut self,cx:&mut Context<Self>){self.maximized=false;self.menu=false;cx.notify();}
     pub fn dismiss_menu(&mut self,cx:&mut Context<Self>){self.menu=false;cx.notify();}
@@ -64,6 +65,10 @@ impl TerminalView{
                     Ok((session,events,label))=>{
                         let session=Arc::new(session);this.session=Some(session.clone());this.label=label;this.status=if cfg!(windows){"Local PTY · Ctrl+C depends on the running program"}else{"Local PTY · live shell session"}.into();
                         let mut g=this.grid.borrow_mut();g.parser=terminal::parser(rows,cols);g.rows.clear();g.marked.clear();g.selection=None;g.session=Some(session);g.sync_theme();g.history();drop(g);
+                        if let Some(pending)=this.pending_input.take(){
+                            let bytes=terminal::paste_bytes(&pending,this.grid.borrow().parser.screen().bracketed_paste());
+                            this.send(&bytes,cx);
+                        }
                         this.reader=Some(cx.spawn(async move|this,cx|{
                             while let Ok(first)=events.recv().await{
                                 let mut batch=vec![first];let mut budget=8192;
@@ -112,6 +117,16 @@ impl TerminalView{
             let answer=window.prompt(PromptLevel::Warning,"Paste multiple lines?",Some("Pasting line breaks into a shell can execute commands. Review the clipboard before continuing."),&[PromptButton::ok("Paste"),PromptButton::cancel("Cancel")],cx);
             cx.spawn_in(window,async move|this,cx|{if answer.await.ok()!=Some(0){return;}let _=this.update_in(cx,|this,w,cx|{if this.generation==generation{let bytes=terminal::paste_bytes(&text,this.grid.borrow().parser.screen().bracketed_paste());this.send(&bytes,cx);this.focus.focus(w,cx);}});}).detach();
         }else{let bytes=terminal::paste_bytes(&text,self.grid.borrow().parser.screen().bracketed_paste());self.send(&bytes,cx);self.focus.focus(window,cx);}
+    }
+    pub fn inject_input(&mut self,text:&str,window:&mut Window,cx:&mut Context<Self>){
+        self.menu=false;self.focus.focus(window,cx);
+        if self.session.as_ref().is_some_and(|s|s.running())&&!self.starting{
+            let bytes=terminal::paste_bytes(text,self.grid.borrow().parser.screen().bracketed_paste());
+            self.send(&bytes,cx);
+        }else{
+            self.pending_input=Some(text.to_string());
+        }
+        cx.notify();
     }
     fn paste(&mut self,window:&mut Window,cx:&mut Context<Self>){self.menu=false;cx.notify();if self.starting||!self.active(){return;}if let Some(text)=cx.read_from_clipboard().and_then(|i|i.text()){self.paste_text(text,window,cx);}}
     fn wheel(&mut self,event:&ScrollWheelEvent,window:&mut Window,cx:&mut Context<Self>){

@@ -81,6 +81,14 @@ impl PiTraceView {
     pub fn active(&self) -> bool {
         self.bridge.is_some()
     }
+    pub(crate) fn has_tool_failure(&self) -> bool {
+        if self.graph_highlights_hidden {
+            return false;
+        }
+        self.calls
+            .iter()
+            .any(|c| c.state == State::Failed && c.name != "read")
+    }
     pub(crate) fn paths(&self) -> std::collections::HashMap<String, State> {
         let mut paths = std::collections::HashMap::new();
         if self.graph_highlights_hidden {
@@ -209,6 +217,15 @@ impl PiTraceView {
         if self.active() {
             cx.write_to_clipboard(ClipboardItem::new_string(self.command.clone()));
         }
+    }
+    pub fn command_text(&self) -> &str {
+        &self.command
+    }
+    pub fn connected(&self) -> bool {
+        self.active()
+            && !self.status.starts_with("Waiting")
+            && !self.status.starts_with("Pi exited")
+            && !self.status.starts_with("Could not")
     }
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.reader = None;

@@ -37,7 +37,8 @@ impl Studio {
         let paths=self.pi_trace.read(cx).paths();
         let stages=self.pi_trace.read(cx).graph_stages();
         let metrics=self.pi_trace.read(cx).metric_labels();
-        flow_entity.update(cx,|canvas,cx|{canvas.sync(self.graph_revision,graph,cx);canvas.set_trace(paths,stages,metrics,cx);canvas.set_git(git,cx);});
+        let failed=self.pi_trace.read(cx).has_tool_failure();
+        flow_entity.update(cx,|canvas,cx|{canvas.sync(self.graph_revision,graph,cx);canvas.set_trace(paths,stages,metrics,failed,cx);canvas.set_git(git,cx);});
         let mut mode_switch=div().flex().items_center().gap(px(2.)).p(px(2.)).bg(rgb(BG)).rounded(px(6.)).border_1().border_color(rgb(BORDER));
         mode_switch=mode_switch
             .child(icon_label("flow-view",Icon::Branch,crate::i18n::text("Context Budget Map"),self.flow_mode,true).h(px(28.)).px(px(10.)).on_click(cx.listener(|this,_,_,cx|{this.flow_mode=true;cx.notify();})))

@@ -76,6 +76,7 @@ impl Studio {
                 };
                 let file = diagnostic.file.clone();
                 let line = diagnostic.line;
+                let prompt = diagnostic.pi_prompt();
                 list = list.child(
                     div()
                         .id(("problem-row", index))
@@ -85,6 +86,7 @@ impl Studio {
                         .border_b_1()
                         .border_color(rgb(BORDER))
                         .flex()
+                        .items_start()
                         .gap(px(9.))
                         .cursor(CursorStyle::Arrow)
                         .hover(|s| s.bg(rgb(HOVER)))
@@ -129,6 +131,30 @@ impl Studio {
                                         .text_color(rgb(MUTED))
                                         .child(diagnostic.detail.clone()),
                                 ),
+                        )
+                        .child(
+                            div()
+                                .id(("problem-fix-pi", index))
+                                .flex_none()
+                                .mt(px(2.))
+                                .px(px(8.))
+                                .py(px(3.))
+                                .rounded(px(999.))
+                                .bg(rgb(RAISED))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .font_family(MONO_FONT)
+                                .text_size(px(10.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(ACCENT))
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|s| s.border_color(rgb(ACCENT)).text_color(rgb(TEXT)))
+                                .child(crate::i18n::text("✦ Fix with Pi"))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.dispatch_to_pi(prompt.clone(), window, cx);
+                                })),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if !file.is_empty() {

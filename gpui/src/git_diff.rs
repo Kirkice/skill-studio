@@ -26,6 +26,9 @@ impl Change {
 pub struct File {
     pub change: Option<Change>,
     pub lines: Vec<(usize, usize, Change)>,
+    pub head_frontmatter_tokens: Option<usize>,
+    pub head_body_tokens: Option<usize>,
+    pub head_total_tokens: Option<usize>,
 }
 pub type Snapshot = HashMap<String, File>;
 fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
@@ -109,6 +112,9 @@ pub fn scan(root: &Path, docs: &[String]) -> Result<Snapshot, String> {
             File {
                 change: Some(change),
                 lines: vec![],
+                head_frontmatter_tokens: None,
+                head_body_tokens: None,
+                head_total_tokens: None,
             },
         );
     }
@@ -132,6 +138,9 @@ pub fn scan(root: &Path, docs: &[String]) -> Result<Snapshot, String> {
                     File {
                         change: Some(Change::Added),
                         lines: vec![],
+                        head_frontmatter_tokens: Some(0),
+                        head_body_tokens: Some(0),
+                        head_total_tokens: Some(0),
                     },
                 );
             }
@@ -155,6 +164,23 @@ pub fn scan(root: &Path, docs: &[String]) -> Result<Snapshot, String> {
                 ],
             )?;
             file.lines = hunks(&String::from_utf8_lossy(&patch));
+            if let Ok(raw) = git(root, &["show", &format!("HEAD:{id}")]) {
+                let text = String::from_utf8_lossy(&raw);
+                let body = crate::preview::body(&text);
+                let fm_len = text.len().saturating_sub(body.len());
+                let fm_tok = crate::core::estimate_tokens(&text[..fm_len]);
+                let body_tok = crate::core::estimate_tokens(&body);
+                file.head_frontmatter_tokens = Some(fm_tok);
+                file.head_body_tokens = Some(body_tok);
+                file.head_total_tokens = Some(fm_tok + body_tok);
+            }
+        } else if let Some(file) = files
+            .get_mut(id)
+            .filter(|f| f.change == Some(Change::Added))
+        {
+            file.head_frontmatter_tokens = Some(0);
+            file.head_body_tokens = Some(0);
+            file.head_total_tokens = Some(0);
         }
     }
     Ok(files)

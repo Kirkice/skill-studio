@@ -49,6 +49,32 @@ impl Studio {
         self.pi_trace_visible=true;
         self.pi_trace.update(cx,|trace,cx|{trace.start(cwd,&self.preferences.pi_launcher,cx);if !active{trace.copy_command(cx);}});cx.notify();
     }
+    pub(crate) fn dispatch_to_pi(&mut self,prompt:String,window:&mut Window,cx:&mut Context<Self>){
+        let Some(cwd)=self.graph.as_ref().map(|g|std::path::PathBuf::from(&g.root)) else{return;};
+        if !self.composition_ready(window,cx){return;}
+        self.show_terminal(window,cx);
+        self.pi_trace_visible=true;
+        self.pi_trace.update(cx,|trace,cx|trace.start(cwd,&self.preferences.pi_launcher,cx));
+        cx.write_to_clipboard(ClipboardItem::new_string(prompt.clone()));
+        let connected=self.pi_trace.read(cx).connected();
+        let command=self.pi_trace.read(cx).command_text().to_string();
+        let payload=if connected || command.is_empty(){
+            prompt
+        }else if cfg!(windows){
+            let q=format!("'{}'",prompt.replace('\'',"''"));
+            format!("{command} {q}")
+        }else{
+            let q=format!("'{}'",prompt.replace('\'',"'\\''"));
+            format!("{command} {q}")
+        };
+        self.terminal.update(cx,|t,cx|t.inject_input(&payload,window,cx));
+        self.status=if connected{
+            "Dispatched prompt to Pi terminal (press Enter to run · also copied)".into()
+        }else{
+            "Prepared Pi launch + prompt in terminal (press Enter to run · prompt copied)".into()
+        };
+        cx.notify();
+    }
     fn hide_bottom_panel(&mut self,window:&mut Window,cx:&mut Context<Self>){
         self.terminal_visible=false;self.pi_trace_visible=false;if self.terminal_drag.as_ref().is_some_and(|d|!d.problems){self.terminal_drag=None;}self.terminal.update(cx,|t,cx|t.dismiss_menu(cx));
         if self.active_text(){self.editor.update(cx,|e,cx|e.focus(window,cx));}else{self.focus_handle.focus(window,cx);}cx.notify();
