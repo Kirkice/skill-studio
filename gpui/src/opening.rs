@@ -41,7 +41,7 @@ impl Studio{
                 match result{
                     Ok((graph,file,saved))=>{
                         if !this.composition_ready(window,cx)||!this.guard(cx){return;}
-                        this.graph_canvas=None;
+                        this.graph_canvas=None;this.explorer_selection=None;this.explorer_multi.clear();
                         this.generation+=1;this.positions=saved.positions;this.roles=saved.roles;this.zoom=1.;this.focus=false;
                         this.graph_revision+=1;
                         let has_skills=graph.nodes.iter().any(|n|n.kind=="skill");
