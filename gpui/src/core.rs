@@ -40,6 +40,23 @@ pub struct Document {
     pub content: String,
 }
 // Only explicit Markdown links and standalone inline-code file paths are indexed.
+fn tool_kind(path:&Path)->Option<&'static str>{
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str(){
+        "py"|"sh"|"bash"|"zsh"|"fish"|"js"|"mjs"|"ts"|"ps1"|"rs"|"bat"|"cmd"|"rb"|"lua"|"pl"=>Some("script"),
+        "exe"|"com"|"appimage"|"wasm"|"jar"|"msi"=>Some("tool"),
+        _=>None,
+    }
+}
+pub(crate) fn is_tool(kind:&str)->bool{matches!(kind,"script"|"tool"|"cli"|"mcp")}
+fn symbolic_tool(dest:&str)->Option<(&str,&str)>{
+    let (kind,name)=dest.split_once(':')?;
+    (matches!(kind,"cli"|"mcp")&&!name.is_empty()&&name.len()<=160&&name.bytes().all(|b|b.is_ascii_alphanumeric()||b"-_./".contains(&b))).then_some((kind,name))
+}
+fn add_symbolic_tool(graph:&mut Graph,known:&mut HashSet<String>,source:&str,dest:&str,line:usize)->bool{
+    let Some((kind,name))=symbolic_tool(dest)else{return false;};
+    if known.insert(dest.into()){graph.nodes.push(Node{id:dest.into(),label:name.into(),kind:kind.into(),title:String::new(),summary:String::new(),headings:vec![]});}
+    graph.edges.push(Edge{source:source.into(),target:dest.into(),line,missing:false});true
+}
 fn references(content: &str) -> Vec<(String, usize)> {
     Parser::new(content)
         .into_offset_iter()
@@ -47,24 +64,16 @@ fn references(content: &str) -> Vec<(String, usize)> {
             let dest = match event {
                 Event::Start(Tag::Link { dest_url, .. })
                 | Event::Start(Tag::Image { dest_url, .. }) => dest_url.to_string(),
-                Event::Code(code)
-                    if !code.chars().any(char::is_whitespace)
-                        && matches!(
-                            Path::new(code.as_ref())
-                                .extension()
-                                .and_then(|e| e.to_str()),
-                            Some("md" | "py" | "sh" | "js" | "ts" | "ps1" | "rs")
-                        ) =>
-                {
-                    code.to_string()
-                }
+                Event::Code(code) if !code.chars().any(char::is_whitespace)
+                    && (Path::new(code.as_ref()).extension().is_some_and(|ext|ext.eq_ignore_ascii_case("md"))
+                        || tool_kind(Path::new(code.as_ref())).is_some() || symbolic_tool(code.as_ref()).is_some()) => code.to_string(),
                 _ => return None,
             };
-            if dest.starts_with('#') || dest.contains(':') || dest.starts_with("//") {
+            if dest.starts_with('#') || (dest.contains(':') && symbolic_tool(&dest).is_none()) || dest.starts_with("//") {
                 return None;
             }
             let dest = dest.split(['#', '?']).next().unwrap_or("").to_string();
-            if dest.is_empty() {
+            if dest.is_empty() || Path::new(&dest).is_absolute() { 
                 return None;
             }
             Some((
@@ -190,8 +199,8 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
             continue;
         }
         let p = entry.path();
-        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !matches!(ext, "md" | "py" | "sh" | "js" | "ts" | "ps1" | "rs") {
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if ext != "md" && tool_kind(p)!=Some("script") {
             continue;
         }
         let key = id(&root, p);
@@ -231,6 +240,7 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
             }
         };
         for (dest, line) in references(&content) {
+            if add_symbolic_tool(&mut graph,&mut known,&id(&root,&p),&dest,line){continue;}
             let target_path = p.parent().unwrap().join(&dest);
             let canonical = target_path.canonicalize();
             if let Ok(ref cp) = canonical {
@@ -249,7 +259,7 @@ pub fn scan_workspace(root: &Path) -> Result<Graph, String> {
                 graph.nodes.push(Node {
                     id: target.clone(),
                     label: dest,
-                    kind: if missing { "missing" } else { "file" }.into(),
+                    kind: if missing { "missing" } else { tool_kind(&target_path).unwrap_or("file") }.into(),
                     title: String::new(),
                     summary: String::new(),
                     headings: vec![],
@@ -277,7 +287,7 @@ pub fn scan_file(path:&Path)->Result<Graph,String>{
     fn node(root:&Path,path:&Path,key:String)->Node{
         let label=path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let ext=path.extension().and_then(|e|e.to_str()).unwrap_or("").to_ascii_lowercase();
-        let kind=if label.eq_ignore_ascii_case("SKILL.md"){"skill"}else if ext=="md"{"document"}else if matches!(ext.as_str(),"py"|"sh"|"js"|"ts"|"ps1"|"rs"){"script"}else{"file"};
+        let kind=if label.eq_ignore_ascii_case("SKILL.md"){"skill"}else if ext=="md"{"document"}else{tool_kind(path).unwrap_or("file")};
         let (title,summary,headings)=if ext=="md"{read_document(root,&key).map(|d|metadata(&d.content)).unwrap_or_default()}else{Default::default()};
         Node{id:key,label,kind:kind.into(),title,summary,headings}
     }
@@ -288,6 +298,7 @@ pub fn scan_file(path:&Path)->Result<Graph,String>{
             let refs=references(&doc.content);
             if refs.len()>128{graph.warnings.push("Single-file index limited to 128 direct references".into());}
             for (dest,line) in refs.into_iter().take(128){
+                if add_symbolic_tool(&mut graph,&mut known,&source,&dest,line){continue;}
                 let candidate=root.join(&dest);let canonical=candidate.canonicalize();
                 if canonical.as_ref().is_ok_and(|p|!p.starts_with(&root)){graph.warnings.push(format!("External reference ignored: {dest}"));continue;}
                 let missing=canonical.as_ref().map_or(true,|p|!p.is_file());
@@ -344,6 +355,21 @@ pub fn create_skill(root: &Path, name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tool_references_are_indexed_in_both_scopes() {
+        let dir=tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("SKILL.md"), "# Example\n\n`cli:git`\n\n## Step 1: Inspect\n\n[mcp](mcp:docs/search) and `inspect.EXE` and `check.sh`.").unwrap();
+        fs::write(dir.path().join("inspect.EXE"), "").unwrap();
+        fs::write(dir.path().join("check.sh"), "").unwrap();
+        for graph in [open_workspace(dir.path()).unwrap(),scan_file(&dir.path().join("SKILL.md")).unwrap()] {
+            assert_eq!(graph.nodes.iter().filter(|n|is_tool(&n.kind)).count(),4);
+            let flow=graph.flows.iter().find(|f|f.entry).unwrap();
+            assert!(flow.stages.iter().flat_map(|s|&s.calls).all(|c|c.tool));
+            assert_eq!(flow.stages.iter().flat_map(|s|&s.calls).count(),4);
+            assert!(!graph.edges.iter().any(|e|e.missing));
+        }
+    }
+
     #[test]
     fn parses_links_and_inline_paths_with_lines() {
         let refs = references("# 测试\n\n[规范](refs/api.md#auth)\n运行 `scripts/check.py`\n");

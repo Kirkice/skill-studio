@@ -272,7 +272,7 @@ impl Studio {
     }
     fn save_layout(&mut self, cx: &mut Context<Self>) {
         if let Some(graph) = &self.graph {
-            self.status = match layout::save(&graph.root, &self.positions, &self.roles) { Ok(()) => "Layout saved".into(), Err(e) => format!("Failed to save layout: {e}") };
+            self.status = match layout::save(&layout::scope_key(&graph.root,self.workspace_file.as_deref()), &self.positions, &self.roles) { Ok(()) => "Layout saved".into(), Err(e) => format!("Failed to save layout: {e}") };
             cx.notify();
         }
     }
@@ -441,6 +441,8 @@ fn main() {
         gpui_base::init(cx);
         ui::terminal::bind_keys(cx);
         ui::explorer::bind_keys(cx);
+        ui::graph::bind_keys(cx);
+        ui::graph::bind_keys(cx);
         let loaded=settings::load();
         let mut settings_warning=loaded.as_ref().err().map(|e|format!("Settings could not be loaded: {e}"));
         let mut preferences=loaded.unwrap_or_default();

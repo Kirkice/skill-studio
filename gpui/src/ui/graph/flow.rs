@@ -36,7 +36,7 @@ impl Diagram{
   if let Some(condition)=&context.condition{meaning.condition=Some(condition.clone());}
   // Contextual condition belongs to the caller; target semantics keep their own source.
   let title=if meaning.action.text.is_empty(){call.title.clone()}else{meaning.action.text.clone()};
-  self.push(Card{id,title,source:call.target.clone(),line:1,x,y,h:semantic_height(&meaning),kind:"call",context_source:context.condition.as_ref().map(|_|source.to_string()),meaning,evidence:Some((source.into(),call.line))})
+  self.push(Card{id,title,source:call.target.clone(),line:1,x,y,h:semantic_height(&meaning),kind:if call.tool{"tool"}else{"call"},context_source:context.condition.as_ref().map(|_|source.to_string()),meaning,evidence:Some((source.into(),call.line))})
  }
  fn build(flows:&[Flow],root:&Flow)->Self{
   let mut diagram=Self::default();let x=600.;
@@ -78,7 +78,7 @@ impl FlowCanvas{
  pub(super) fn set_git(&mut self,git:Option<std::sync::Arc<crate::git_diff::Snapshot>>,cx:&mut Context<Self>){if !super::super::git_changes::same_snapshot(&self.git,&git){self.git=git;cx.notify();}}
  fn trace_state(&self,card:&Card)->Option<crate::ui::pi_trace::State>{
   if card.kind=="stage" {return None;}
-  if card.kind=="call"&&self.diagram.cards.iter().filter(|c|c.kind=="call"&&c.source==card.source).count()!=1{return None;}
+  if matches!(card.kind,"call"|"tool")&&self.diagram.cards.iter().filter(|c|matches!(c.kind,"call"|"tool")&&c.source==card.source).count()!=1{return None;}
   self.trace.get(&card.source).copied()
  }
  fn rebuild(&mut self){self.diagram=self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|Some(&f.source)==self.root.as_ref()).map(|root|Diagram::build(&g.flows,root))).unwrap_or_default();if self.selected.as_ref().is_some_and(|id|!self.diagram.cards.iter().any(|n|&n.id==id)){self.selected=None;}}
@@ -143,10 +143,10 @@ impl Render for FlowCanvas{
   }).absolute().size_full());
   let compact=z<0.38;
   for(i,card)in self.diagram.cards.iter().enumerate(){
-   let color=match card.kind{"main"=>0xb5a2ce,"subroot"|"call"=>0x62c7c7,_=>0x4ea1ff};
-   let (label,glyph)=match card.kind{"main"=>("MAIN SKILL",Icon::Skill),"subroot"=>("SUBFLOW ROOT",Icon::Skill),"call"=>("SUBFLOW",Icon::Branch),_=>("PHASE / STEP",Icon::Layers)};
+   let color=match card.kind{"main"=>0xb5a2ce,"tool"=>0xd6a875,"subroot"|"call"=>0x62c7c7,_=>0x4ea1ff};
+   let (label,glyph)=match card.kind{"main"=>("MAIN SKILL",Icon::Skill),"subroot"=>("SUBFLOW ROOT",Icon::Skill),"call"=>("SUBFLOW",Icon::Branch),"tool"=>(if card.source.starts_with("cli:"){"TOOL · CLI"}else if card.source.starts_with("mcp:"){"TOOL · MCP"}else{"TOOL"},Icon::Terminal),_=>("PHASE / STEP",Icon::Layers)};
    let runtime=states[i];let selected=self.selected.as_deref()==Some(card.id.as_str());let border=runtime.map(runtime_color).unwrap_or(if selected{visual::INCOMING}else{BORDER});
-   let path=card.source.clone();let line=card.line;let click_path=card.source.clone();let click_line=card.line;let is_call=card.kind=="call";
+   let (path,line)=if card.kind=="tool"&&(card.source.starts_with("cli:")||card.source.starts_with("mcp:")){card.evidence.clone().unwrap_or((card.source.clone(),card.line))}else{(card.source.clone(),card.line.max(1))};let click_path=path.clone();let click_line=line;let is_call=card.kind=="call";
    let select_id=card.id.clone();let source_id=card.id.clone();
    let filename=card.source.rsplit('/').next().unwrap_or(&card.source).to_string();
    let mut footer=div().h(px((26.*z).max(24.))).flex_none().flex().items_center().justify_between().gap(px(4.*z)).border_t_1().border_color(rgb(BORDER)).pt(px(4.*z));
@@ -292,7 +292,7 @@ mod stage_trace_tests{
 #[cfg(test)]mod tests{
  use super::*;
  fn flows()->Vec<Flow>{
-  let call=|target:&str|crate::flow::Call{target:target.into(),title:target.into(),line:4};
+  let call=|target:&str|crate::flow::Call{target:target.into(),title:target.into(),line:4,tool:false};
   let root=Flow{source:"SKILL.md".into(),title:"主技能".into(),entry:true,meaning:Default::default(),stages:vec![crate::flow::Stage{title:"Step 1".into(),line:2,summary:String::new(),meaning:Default::default(),calls:vec![call("a.md"),call("b.md")]},crate::flow::Stage{title:"Step 2".into(),line:8,summary:String::new(),meaning:Default::default(),calls:vec![call("a.md")]}]};
   let child=Flow{source:"a.md".into(),title:"A".into(),entry:false,meaning:Default::default(),stages:vec![crate::flow::Stage{title:"子流程检查".into(),line:16,summary:String::new(),meaning:Default::default(),calls:vec![call("SKILL.md")]}]};
   vec![root,child]

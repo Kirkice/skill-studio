@@ -76,6 +76,10 @@ Windows 上若要体验内置终端或 Pi Trace，请先运行 `python tools/pre
 
 普通终端中已启动的 Pi 不会自动接入。需要指定本机 Pi 启动器时，可在启动 Skill Studio 前设置 `SKILLRIDER_PI_LAUNCHER`。显式阶段报告由 `skillrider_stage` 提供；未接入协议的 Skill 仍可按文件调用证据显示高亮，但不能确认整个阶段已完成。
 
+## 工具卡片
+
+流程图和依赖图用琥珀色 `TOOL` 卡片展示本地脚本、可执行文件、CLI 和 MCP 工具。可用 Markdown 相对链接或行内路径引用文件（如 `scripts/check.sh`、`bin/inspect.exe`），用 `cli:git` 或 `mcp:docs/search` 显式标记非文件工具。点击卡片可打开本地文件或定位符号工具的引用行，不会执行命令或连接 MCP 服务。
+
 ## 使用边界
 
 - **流程图是对文档的解读，不是执行引擎。** 它不运行步骤，不强制执行文档中的确认要求，也不会调用模型补全信息。

@@ -33,7 +33,7 @@ impl Studio{
             let result=cx.background_executor().spawn(async move{
                 let graph=if single{core::scan_file(&path)}else{core::open_workspace(&path)}?;
                 let file=if single{graph.nodes.first().map(|n|n.id.clone())}else{None};
-                let saved=if single{layout::LayoutFile{version:1,..Default::default()}}else{layout::load(&graph.root).unwrap_or_else(|_|layout::LayoutFile{version:1,..Default::default()})};
+                let saved=layout::load(&layout::scope_key(&graph.root,file.as_deref())).unwrap_or_else(|_|layout::LayoutFile{version:1,..Default::default()});
                 Ok::<_,String>((graph,file,saved))
             }).await;
             let _=this.update_in(cx,|this,window,cx|{
@@ -41,6 +41,7 @@ impl Studio{
                 match result{
                     Ok((graph,file,saved))=>{
                         if !this.composition_ready(window,cx)||!this.guard(cx){return;}
+                        this.graph_canvas=None;
                         this.generation+=1;this.positions=saved.positions;this.roles=saved.roles;this.zoom=1.;this.focus=false;
                         this.graph_revision+=1;
                         let has_skills=graph.nodes.iter().any(|n|n.kind=="skill");

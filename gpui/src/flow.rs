@@ -4,7 +4,7 @@ use pulldown_cmark::{Event,HeadingLevel,Parser,Tag,TagEnd};
 use serde::Serialize;
 use std::{collections::HashSet,path::Path};
 #[derive(Clone,Serialize)]
-pub struct Call{pub target:String,pub title:String,pub line:usize}
+pub struct Call{pub target:String,pub title:String,pub line:usize,#[serde(default)] pub tool:bool}
 #[derive(Clone,Serialize)]
 pub struct Stage{pub title:String,pub line:usize,pub summary:String,pub calls:Vec<Call>,pub meaning:crate::meaning::Meaning}
 #[derive(Clone,Serialize)]
@@ -31,9 +31,9 @@ pub fn parse(source:&str,content:&str,title:&str,entry:bool,graph:&Graph)->Flow{
   let next_line=headings.get(i+1).map_or(usize::MAX,|next|next.line);
   let mut seen=HashSet::new();
   let calls=graph.edges.iter().filter(|e|e.source==source&&e.line>h.line&&e.line<next_line&&!e.missing).filter_map(|edge|{
-   let node=graph.nodes.iter().find(|n|n.id==edge.target&&matches!(n.kind.as_str(),"skill"|"document"))?;
+   let node=graph.nodes.iter().find(|n|n.id==edge.target&&(matches!(n.kind.as_str(),"skill"|"document")||crate::core::is_tool(&n.kind)))?;
    if !seen.insert(node.id.clone()){return None;}
-   Some(Call{target:node.id.clone(),title:if node.title.is_empty(){node.label.clone()}else{node.title.clone()},line:edge.line})
+   Some(Call{target:node.id.clone(),title:if node.title.is_empty(){node.label.clone()}else{node.title.clone()},line:edge.line,tool:crate::core::is_tool(&node.kind)})
   }).collect();
   let mut paragraph=false;let mut summary=String::new();
   for event in Parser::new(&content[h.end.min(end)..end]){match event{
@@ -47,6 +47,13 @@ pub fn parse(source:&str,content:&str,title:&str,entry:bool,graph:&Graph)->Flow{
   let meaning=crate::meaning::extract(&h.title,h.line,&content[start..end],base_line);
   stages.push(Stage{title:h.title.clone(),line:h.line,summary:summary.chars().take(160).collect(),calls,meaning});
  }
+ let mut extra=Vec::new();
+ for edge in graph.edges.iter().filter(|e|e.source==source&&!e.missing){
+  let Some(node)=graph.nodes.iter().find(|n|n.id==edge.target&&crate::core::is_tool(&n.kind))else{continue;};
+  if stages.iter().any(|s|s.calls.iter().any(|c|c.target==edge.target))||extra.iter().any(|c:&Call|c.target==edge.target){continue;}
+  extra.push(Call{target:node.id.clone(),title:node.label.clone(),line:edge.line,tool:true});
+ }
+ if !extra.is_empty(){stages.insert(0,Stage{title:"Referenced tools".into(),line:0,summary:String::new(),calls:extra,meaning:Default::default()});}
  let entry_end=headings.iter().find(|h|explicit(&h.title)).map_or(content.len(),|h|h.start);
  Flow{source:source.into(),title:title.into(),entry,stages,meaning:crate::meaning::document(title,&content[..entry_end])}
 }

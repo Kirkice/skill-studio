@@ -19,6 +19,9 @@ pub fn decode(bytes: &[u8]) -> Result<LayoutFile, String> {
     Ok(file)
 }
 
+pub fn scope_key(root:&str,file:Option<&str>)->String{
+    match file {Some(file)=>format!("{root}\0{file}"),None=>root.to_owned()}
+}
 fn path(root: &str) -> Result<PathBuf, String> {
     let config = dirs::config_dir().ok_or("User configuration directory is unavailable")?;
     let digest = Sha256::digest(root.as_bytes());

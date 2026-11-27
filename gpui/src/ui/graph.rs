@@ -6,6 +6,11 @@ use std::collections::{HashMap, HashSet};
 use crate::core::Graph;
 mod minimap;
 mod visual;
+actions!(graph_keys,[UndoGraphMove]);
+pub(crate) fn bind_keys(cx:&mut App){
+    let key=if cfg!(target_os="macos"){"cmd-z"}else{"ctrl-z"};
+    cx.bind_keys([KeyBinding::new(key,UndoGraphMove,Some("ReferenceGraph"))]);
+}
 pub(crate) mod flow;
 use std::{cell::Cell, rc::Rc};
 
@@ -21,7 +26,7 @@ impl Studio {
                 .child(primary_icon("welcome-open",Icon::FolderOpen,"Open workspace").h(px(34.)).on_click(cx.listener(|this,_,w,cx|this.open(w,cx)))));
         };
 
-        if self.graph_canvas.is_none(){let owner=cx.entity().downgrade();self.graph_canvas=Some(cx.new(|_|GraphCanvas::new(owner)));}
+        if self.graph_canvas.is_none(){let owner=cx.entity().downgrade();self.graph_canvas=Some(cx.new(|cx|GraphCanvas::new(owner,cx.focus_handle())));}
         let entity=self.graph_canvas.as_ref().unwrap().clone();
         entity.update(cx,|canvas,cx|canvas.sync(self.graph_revision,graph,visible,&self.positions,&self.roles,self.selected.as_deref(),self.zoom,cx));
         let git=self.git.files.clone();
@@ -90,6 +95,10 @@ fn zoom_offset(offset:Point<Pixels>,anchor:Point<Pixels>,old_zoom:f32,new_zoom:f
     // Keep the world-space point under the pointer at the same screen position.
     anchor-(anchor-offset)*(new_zoom/old_zoom)
 }
+fn marquee_hits(a:Point<Pixels>,b:Point<Pixels>,p:layout::Position,z:f32)->bool{
+    a.x.min(b.x)<px((p.x+264.)*z)&&a.x.max(b.x)>px(p.x*z)
+        &&a.y.min(b.y)<px((p.y+188.)*z)&&a.y.max(b.y)>px(p.y*z)
+}
 fn world_bounds(positions:&layout::Positions)->(f32,f32,f32,f32){
     positions.values().fold((f32::INFINITY,f32::INFINITY,f32::NEG_INFINITY,f32::NEG_INFINITY),|(x0,y0,x1,y1),p|(x0.min(p.x),y0.min(p.y),x1.max(p.x+264.),y1.max(p.y+188.)))
 }
@@ -111,7 +120,12 @@ pub(crate) struct GraphCanvas {
     reference_menu:Option<ReferenceGroup>,
     selected:Option<String>,
     zoom:f32,
-    drag:Option<(String,Point<Pixels>,layout::Position)>,
+    group:Option<HashSet<String>>,
+    marquee:Option<(Point<Pixels>,Point<Pixels>,HashSet<String>)>,
+    drag:Option<(Point<Pixels>,layout::Positions)>,
+    additive_click:bool,
+    focus:FocusHandle,
+    undo_moves:Vec<Vec<(String,Option<layout::Position>)>>,
     drag_moved:bool,
     camera:Point<Pixels>,
     viewport_bounds:Rc<Cell<Bounds<Pixels>>>,
@@ -119,8 +133,8 @@ pub(crate) struct GraphCanvas {
     minimap:minimap::MiniMapState,
 }
 impl GraphCanvas {
-    fn new(owner:WeakEntity<Studio>)->Self{
-        Self{git:None,owner,revision:u64::MAX,graph:None,visible:HashSet::new(),saved_positions:Default::default(),automatic_positions:Default::default(),positions:Default::default(),roles:Default::default(),node_roles:Default::default(),meanings:Default::default(),incoming:Default::default(),outgoing:Default::default(),references:vec![],reference_menu:None,selected:None,zoom:1.,drag:None,drag_moved:false,camera:Point::default(),viewport_bounds:Rc::new(Cell::new(Bounds::default())),pan:None,minimap:Default::default()}
+    fn new(owner:WeakEntity<Studio>,focus:FocusHandle)->Self{
+        Self{git:None,owner,revision:u64::MAX,graph:None,visible:HashSet::new(),saved_positions:Default::default(),automatic_positions:Default::default(),positions:Default::default(),roles:Default::default(),node_roles:Default::default(),meanings:Default::default(),incoming:Default::default(),outgoing:Default::default(),references:vec![],reference_menu:None,selected:None,zoom:1.,group:None,marquee:None,drag:None,additive_click:false,focus,undo_moves:vec![],drag_moved:false,camera:Point::default(),viewport_bounds:Rc::new(Cell::new(Bounds::default())),pan:None,minimap:Default::default()}
     }
     fn sync(&mut self,revision:u64,graph:&Graph,visible:&HashSet<String>,saved:&layout::Positions,roles:&layout::Roles,selected:Option<&str>,zoom:f32,cx:&mut Context<Self>){
         let changed=self.revision!=revision || self.visible!=*visible;
@@ -128,7 +142,8 @@ impl GraphCanvas {
         let positions_changed=self.saved_positions!=*saved;
         let presentation_changed=self.selected.as_deref()!=selected || self.zoom!=zoom;
         if changed{
-            if self.visible!=*visible||self.graph.as_ref().is_none_or(|old|old.root!=graph.root){self.camera=Point::default();self.pan=None;}
+            if self.graph.as_ref().is_none_or(|old|old.root!=graph.root){self.undo_moves.clear();}
+            if self.visible!=*visible||self.graph.as_ref().is_none_or(|old|old.root!=graph.root){self.camera=Point::default();self.pan=None;self.group=None;self.marquee=None;}
             self.graph=Some(graph.clone());self.revision=revision;self.visible=visible.clone();
             self.references=group_references(graph,visible);self.reference_menu=None;
             self.meanings=graph.flows.iter().map(|flow|(flow.source.clone(),flow.meaning.clone())).collect();
@@ -148,9 +163,27 @@ impl GraphCanvas {
     pub(crate) fn close_reference_menu(&mut self,cx:&mut Context<Self>){if self.reference_menu.take().is_some(){cx.notify();}}
     fn reference(&mut self,id:String,line:usize,window:&mut Window,cx:&mut Context<Self>){self.reference_menu=None;let _=self.owner.update(cx,|owner,cx|owner.reference(id,line,window,cx));cx.notify();}
     fn commit_drag(&mut self,cx:&mut Context<Self>){
-        if let Some((id,_,_))=self.drag.take(){if self.drag_moved{
-            if let Some(position)=self.positions.get(&id).copied(){let _=self.owner.update(cx,|owner,cx|{owner.positions.insert(id,position);owner.save_layout(cx);});}
-        }}
+        if let Some((_,start))=self.drag.take() && self.drag_moved{
+            let moved=start.keys().filter_map(|id|self.positions.get(id).copied().map(|pos|(id.clone(),pos))).collect::<Vec<_>>();
+            let previous=moved.iter().map(|(id,_)|(id.clone(),self.saved_positions.get(id).copied())).collect();
+            if self.owner.update(cx,|owner,cx|{owner.positions.extend(moved);owner.save_layout(cx);}).is_ok(){
+                if self.undo_moves.len()>=100{self.undo_moves.remove(0);}
+                self.undo_moves.push(previous);
+            }
+        }
+        if self.marquee.take().is_some(){cx.notify();}
+    }
+    fn undo_move(&mut self,cx:&mut Context<Self>){
+        if self.drag.is_some()||self.marquee.is_some(){return;}
+        if let Some(previous)=self.undo_moves.pop(){
+            let _=self.owner.update(cx,|owner,cx|{
+                for (id,position) in previous{
+                    if let Some(position)=position{owner.positions.insert(id,position);}
+                    else{owner.positions.remove(&id);}
+                }
+                owner.save_layout(cx);
+            });
+        }
     }
     fn end_pan(&mut self,cx:&mut Context<Self>){if self.pan.take().is_some(){cx.notify();}}
     fn set_zoom_at(&mut self,zoom:f32,anchor:Point<Pixels>,cx:&mut Context<Self>){
@@ -220,7 +253,9 @@ impl Render for GraphCanvas {
         }}
         for (i,n) in graph.nodes.iter().filter(|n|visible.contains(&n.id)).enumerate(){
             let p=positions[&n.id];let id=n.id.clone();let click_id=id.clone();let missing=n.kind=="missing";
-            let kind=self.node_roles.get(&n.id).map(String::as_str).unwrap_or("file");let color=role::color(kind);let selected=self.selected.as_deref()==Some(&id);
+            let tool=crate::core::is_tool(&n.kind);
+            let origin=if matches!(n.kind.as_str(),"cli"|"mcp"){graph.edges.iter().find(|e|e.target==id).map(|e|(e.source.clone(),e.line))}else{None};
+            let kind=self.node_roles.get(&n.id).map(String::as_str).unwrap_or("file");let color=if tool{0xd6a875}else{role::color(kind)};let selected=self.group.as_ref().map_or(self.selected.as_deref()==Some(&id),|g|g.contains(&id));
             let meaning=self.meanings.get(&n.id);
             let title=meaning.filter(|m|!m.action.text.is_empty()).map(|m|m.action.text.clone()).unwrap_or_else(||if n.title.is_empty(){n.label.clone()}else{n.title.clone()});
             let summary=meaning.and_then(|m|m.purpose.as_ref()).map(|p|p.text.clone()).unwrap_or_else(||n.summary.clone());
@@ -233,29 +268,52 @@ impl Render for GraphCanvas {
             layer=layer.child(div().id(("graph-node",i)).absolute().left(camera.x+px(p.x*z)).top(camera.y+px(p.y*z)).w(px(264.*z)).h(px(188.*z)).flex().flex_col().overflow_hidden().rounded(px(8.)).border_1().border_color(rgb(if selected{visual::INCOMING}else{BORDER})).bg(rgb(if selected{RAISED}else{BG})).shadow_md().cursor(if self.pan.is_some(){CursorStyle::ClosedHand}else{CursorStyle::Arrow}).hover(|s|s.border_color(rgb(color)))
                 .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.))).rounded(px(2.)).bg(rgb(color)))
                 .child(div().flex_1().min_h(px(0.)).px(px(13.*z)).pt(px(10.*z)).flex().flex_col().gap(px(5.*z))
-                    .child(div().flex().items_center().gap(px(5.*z)).text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(color)).child(icon(file_icon(kind)).size(px(13.*z)).text_color(rgb(color))).child(format!("{}{}",role::label(kind),hint)))
+                    .child(div().flex().items_center().gap(px(5.*z)).text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(color)).child(icon(if tool{Icon::Terminal}else{file_icon(kind)}).size(px(13.*z)).text_color(rgb(color))).child(format!("{}{}",if tool{match n.kind.as_str(){"cli"=>"TOOL · CLI","mcp"=>"TOOL · MCP","script"=>"TOOL · Script",_=>"TOOL · Executable"}}else{role::label(kind)},hint)))
                     .child(div().h(px(42.*z)).flex_none().overflow_hidden().text_size(px(16.*z)).line_height(px(21.*z)).font_weight(FontWeight::SEMIBOLD).child(title))
                     .child(div().text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(DIM)).truncate().child(n.id.clone()))
                     .child(div().h(px(32.*z)).overflow_hidden().text_size(px(12.5*z)).line_height(px(17.*z)).text_color(rgb(0xa3a8b2)).child(summary))
                     .child(div().text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(DIM)).truncate().child(context)))
                 .child(div().h(px(25.*z)).flex_none().px(px(13.*z)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between().text_size(px(10.5*z)).line_height(px(14.*z)).text_color(rgb(DIM)).child(format!("↗ {count_out} outgoing")).child(format!("↙ {count_in} incoming")))
-                .on_mouse_down(MouseButton::Left,cx.listener(move|this,e:&MouseDownEvent,_,cx|{this.drag=Some((id.clone(),e.position,p));this.drag_moved=false;cx.stop_propagation();}))
-                .on_click(cx.listener(move|this,event:&ClickEvent,w,cx|{if !missing&&!this.drag_moved{let pin=event.click_count()>1;let id=click_id.clone();let _=this.owner.update(cx,|owner,cx|owner.select_file(id,pin,w,cx));}})));
+                .on_mouse_down(MouseButton::Left,cx.listener(move|this,e:&MouseDownEvent,w,cx|{this.focus.focus(w,cx);let additive=e.modifiers.control||e.modifiers.platform;
+                    this.additive_click=additive;this.drag_moved=false;this.drag=None;
+                    let group=this.group.get_or_insert_with(||this.selected.iter().filter(|id|this.visible.contains(*id)).cloned().collect());
+                    if additive && !group.insert(id.clone()){group.remove(&id);}
+                    else{
+                        if !group.contains(&id){group.clear();group.insert(id.clone());}
+                        this.drag=Some((e.position,group.iter().filter_map(|id|this.positions.get(id).copied().map(|p|(id.clone(),p))).collect()));
+                    }
+                    cx.stop_propagation();cx.notify();}))
+                .on_click(cx.listener(move|this,event:&ClickEvent,w,cx|{if !missing&&!this.drag_moved&&!this.additive_click{this.group=None;cx.notify();let pin=event.click_count()>1;let id=click_id.clone();let _=this.owner.update(cx,|owner,cx|if let Some((path,line))=&origin{owner.reference(path.clone(),*line,w,cx)}else{owner.select_file(id,pin,w,cx)});}})));
+        }
+        if let Some((a,b,_))=&self.marquee{
+            let origin=self.viewport_bounds.get().origin;
+            let (a,b)=(*a-origin,*b-origin);
+            layer=layer.child(div().absolute().left(a.x.min(b.x)).top(a.y.min(b.y))
+                .w(a.x.max(b.x)-a.x.min(b.x)).h(a.y.max(b.y)-a.y.min(b.y))
+                .border_1().border_color(rgb(ACCENT)).bg(visual::tint(ACCENT,0.14)));
         }
         let minimap=self.minimap_view(cx);
         let viewport=div().id("graph-viewport").flex_1().min_h(px(0.)).relative().overflow_hidden()
-            .child(div().id("graph-camera").size_full().overflow_hidden()
+            .child(div().id("graph-camera").size_full().overflow_hidden().track_focus(&self.focus).key_context("ReferenceGraph")
+                .on_action(cx.listener(|this,_:&UndoGraphMove,_,cx|{cx.stop_propagation();this.undo_move(cx);}))
                 // Explicit wheel handling: native scroll must not also shift the view.
                 .on_scroll_wheel(cx.listener(|this,e:&ScrollWheelEvent,window,cx|{
                     window.prevent_default();cx.stop_propagation();
-                    if this.drag.is_some()||this.pan.is_some(){return;}
+                    if this.drag.is_some()||this.pan.is_some()||this.marquee.is_some(){return;}
                     let delta=f32::from(e.delta.pixel_delta(px(20.)).y);
                     let anchor=e.position-this.viewport_bounds.get().origin;
                     this.set_zoom_at(wheel_zoom(this.zoom,delta),anchor,cx);
                 }))
                 .cursor(if self.pan.is_some(){CursorStyle::ClosedHand}else{CursorStyle::Arrow})
+                .on_mouse_down(MouseButton::Left,cx.listener(|this,e:&MouseDownEvent,w,cx|{
+                    this.focus.focus(w,cx);
+                    let base=if e.modifiers.control||e.modifiers.platform{
+                        this.group.clone().unwrap_or_else(||this.selected.iter().filter(|id|this.visible.contains(*id)).cloned().collect())
+                    }else{HashSet::new()};
+                    this.group=Some(base.clone());this.marquee=Some((e.position,e.position,base));cx.notify();
+                }))
                 .on_mouse_down(MouseButton::Right,cx.listener(|this,e:&MouseDownEvent,window,cx|{
-                    this.drag=None;this.pan=Some((e.position,this.camera));
+                    this.drag=None;this.marquee=None;this.pan=Some((e.position,this.camera));
                     window.prevent_default();cx.stop_propagation();cx.notify();
                 }))
                 .on_mouse_up(MouseButton::Right,cx.listener(|this,_,_,cx|{this.end_pan(cx);cx.stop_propagation();}))
@@ -271,9 +329,19 @@ impl Render for GraphCanvas {
                     // Also recover if a release happened outside the application.
                     this.end_pan(cx);
                     if e.pressed_button!=Some(MouseButton::Left){return;}
-                    if let Some((id,start,pos))=&this.drag{
-                        let dx=f32::from(e.position.x-start.x);let dy=f32::from(e.position.y-start.y);
-                        if dx.abs()+dy.abs()>3.{this.drag_moved=true;this.positions.insert(id.clone(),drag_position(*pos,point(px(dx),px(dy)),this.zoom));cx.notify();}
+                    if let Some((a,b,base))=&mut this.marquee{
+                        *b=e.position;
+                        let origin=this.viewport_bounds.get().origin+this.camera;
+                        let mut group=base.clone();
+                        group.extend(this.positions.iter().filter(|(_,p)|marquee_hits(*a-origin,*b-origin,**p,this.zoom)).map(|(id,_)|id.clone()));
+                        this.group=Some(group);cx.notify();
+                    }else if let Some((start,positions))=&this.drag{
+                        let delta=e.position-*start;
+                        if this.drag_moved||f32::from(delta.x).abs()+f32::from(delta.y).abs()>3.{
+                            this.drag_moved=true;
+                            for (id,pos) in positions{this.positions.insert(id.clone(),drag_position(*pos,delta,this.zoom));}
+                            cx.notify();
+                        }
                     }
                 }))
                 .on_mouse_up(MouseButton::Left,cx.listener(|this,_,_,cx|{this.commit_drag(cx);}))
@@ -283,6 +351,7 @@ impl Render for GraphCanvas {
                 .child(icon_button("zoom-reset",Icon::ResetZoom,"Reset zoom to 100%",false,true).on_click(cx.listener(|this,_,_,cx|{this.set_zoom(1.,cx);})))
                 .child(icon_button("zoom-plus",Icon::ZoomIn,"Zoom in",false,true).on_click(cx.listener(|this,_,_,cx|{this.set_zoom((this.zoom+0.1).min(MAX_ZOOM),cx);})))
                 .child(caption(format!("{:.0}%",z*100.)))
+                .child(icon_button("save-reference-layout",Icon::Save,"Save reference graph layout",false,true).on_click(cx.listener(|this,_,_,cx|{let _=this.owner.update(cx,|studio,cx|studio.save_layout(cx));})))
                 .child(icon_button("fit-graph",Icon::Focus,"Fit all nodes",false,true).on_click(cx.listener(|this,_,_,cx|this.fit_all(cx))))
                 .child(icon_button("home-skill",Icon::Skill,"Return to main Skill",false,true).on_click(cx.listener(|this,_,_,cx|this.home(cx)))))
             .child(minimap);
@@ -290,7 +359,7 @@ impl Render for GraphCanvas {
         // viewport uses flex_1, so its entity root MUST be a flex column.
         // A plain block root gives this child zero height and hides the whole graph.
         let mut root=div().size_full().min_h(px(0.)).relative().flex().flex_col().child(viewport)
-            .child(div().flex_none().h(px(20.)).px(px(10.)).text_size(px(10.)).text_color(rgb(DIM)).child("Wheel to zoom · Right-drag to pan freely · Left-drag to move nodes"));
+            .child(div().flex_none().h(px(20.)).px(px(10.)).text_size(px(10.)).text_color(rgb(DIM)).child("Wheel: zoom · Right-drag: pan · Drag empty space: box select · Ctrl/Cmd-click: multi-select"));
         if let Some(group)=self.reference_menu.clone(){
             let mut menu=div().id("reference-menu").occlude().w(px(300.)).max_h(px(320.)).overflow_y_scroll().p(px(10.)).bg(rgb(POPOVER)).border_1().border_color(rgb(BORDER)).rounded(px(8.)).flex().flex_col().gap(px(5.))
                 .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
@@ -324,6 +393,12 @@ impl Render for GraphCanvas {
     let bytes=serde_json::to_vec(&layout::LayoutFile{version:1,positions:positions.clone(),roles:Default::default()}).unwrap();
     assert_eq!(layout::decode(&bytes).unwrap().positions,positions);
   }
+ }
+ #[::core::prelude::v1::test]fn marquee_hits_scaled_cards_in_either_drag_direction(){
+  let p=layout::Position{x:100.,y:50.};
+  let a=point(px(40.),px(20.));let b=point(px(60.),px(30.));
+  assert!(marquee_hits(a,b,p,0.5));assert!(marquee_hits(b,a,p,0.5));
+  assert!(!marquee_hits(a,b,p,1.));
  }
  #[::core::prelude::v1::test]fn pan_is_unbounded_and_reversible(){
   let start=point(px(-100.),px(-200.));
