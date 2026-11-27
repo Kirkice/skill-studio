@@ -10,19 +10,31 @@ pub struct Meaning{
 }
 struct Block{value:Excerpt,heading:String}
 fn short(text:&str,limit:usize)->String{let text=text.trim();let mut out:String=text.chars().take(limit).collect();if text.chars().count()>limit{out.push('…');}out}
+fn is_ascii_noise(text:&str)->bool{
+ let mut run=0usize;
+ for c in text.chars(){
+  if matches!(c,'\u{2500}'..='\u{257f}'|'—'|'-'|'='|'_'|'*'){
+   run+=1;if run>=6{return true;}
+  }else{run=0;}
+ }
+ false
+}
 fn blocks(source:&str,base_line:usize)->Vec<Block>{
  let body=crate::preview::body(source);let offset=source.len()-body.len();
  let base_line=base_line+source[..offset].bytes().filter(|b|*b==b'\n').count();let source=&source[offset..];
  let newlines:Vec<_>=source.bytes().enumerate().filter_map(|(i,b)|(b==b'\n').then_some(i)).collect();
  let line_at=|offset|base_line+newlines.partition_point(|&i|i<offset);
  let mut result=vec![];let mut heading=String::new();let mut active:Option<(Excerpt,bool)>=None;
+ let mut in_item=false;
  for(event,range)in Parser::new(source).into_offset_iter(){match event{
   Event::Start(Tag::Heading{..})=>active=Some((Excerpt{text:String::new(),line:line_at(range.start)},true)),
-  Event::Start(Tag::Paragraph)=>active=Some((Excerpt{text:String::new(),line:line_at(range.start)},false)),
+  Event::Start(Tag::Item)=>{in_item=true;if active.is_none(){active=Some((Excerpt{text:String::new(),line:line_at(range.start)},false));}},
+  Event::Start(Tag::Paragraph)=>if active.is_none(){active=Some((Excerpt{text:String::new(),line:line_at(range.start)},false));},
   Event::Text(t)|Event::Code(t)=>if let Some((value,_))=&mut active{value.text.push_str(&t);},
   Event::SoftBreak|Event::HardBreak=>if let Some((value,_))=&mut active{value.text.push('\n');},
   Event::End(TagEnd::Heading(_))=>if let Some((value,_))=active.take(){heading=value.text;},
-  Event::End(TagEnd::Paragraph)=>if let Some((mut value,_))=active.take(){value.text=value.text.trim().to_string();if !value.text.is_empty(){result.push(Block{value,heading:heading.clone()});}},
+  Event::End(TagEnd::Paragraph)=>if !in_item{if let Some((mut value,_))=active.take(){value.text=value.text.trim().to_string();if !value.text.is_empty(){result.push(Block{value,heading:heading.clone()});}}},
+  Event::End(TagEnd::Item)=>{in_item=false;if let Some((mut value,_))=active.take(){value.text=value.text.trim().to_string();if !value.text.is_empty(){result.push(Block{value,heading:heading.clone()});}}},
   _=>{}
  }}result
 }
@@ -54,7 +66,7 @@ pub fn extract(title:&str,title_line:usize,source:&str,base_line:usize)->Meaning
  let items=blocks(source,base_line);
  let purpose_block=items.iter().find(|b|["使命","目的","目标","用途","purpose","mission","goal"].contains(&b.heading.to_lowercase().trim()))
   .or_else(||items.iter().find(|b|label(&b.value.text,&["目的","目标","用途"]).is_some()))
-  .or_else(||items.iter().find(|b|!b.value.text.starts_with("本步骤不是")&&field(std::slice::from_ref(b),&["输入","输出","返回"]).is_none()&&b.value.text.chars().filter(|c|c.is_alphabetic()).count()>8));
+  .or_else(||items.iter().find(|b|!is_ascii_noise(&b.value.text)&&!b.value.text.starts_with("本步骤不是")&&field(std::slice::from_ref(b),&["输入","输出","返回"]).is_none()&&b.value.text.chars().filter(|c|c.is_alphabetic()).count()>6));
  let explicit_purpose=purpose_block.is_some_and(|b|["使命","目的","目标","用途","purpose","mission","goal"].contains(&b.heading.to_lowercase().trim())||label(&b.value.text,&["目的","目标","用途"]).is_some());
  let purpose=purpose_block.map(|b|{let text=label(&b.value.text,&["目的","目标","用途"]).unwrap_or_else(||b.value.text.clone());sentence(&Excerpt{text,line:b.value.line},120)});
  let clean=cleaned_title(title);

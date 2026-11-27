@@ -90,8 +90,8 @@ pub(super) fn connection(
     dashed: bool,
     style: EdgeStyle,
 ) {
-    let build = |width: f32| {
-        let mut path = PathBuilder::stroke(px(width));
+    if style.related {
+        let mut path = PathBuilder::stroke(px(style.width));
         if dashed {
             path = path.dash_array(&[px(5.), px(4.)]);
         }
@@ -108,31 +108,58 @@ pub(super) fn connection(
             let bend = (end.y - start.y) * 0.5;
             path.cubic_bezier_to(end, start + point(px(0.), bend), end - point(px(0.), bend));
         }
-        path.build().ok()
-    };
-    if style.related {
-        if let Some(path) = build(8.) {
-            window.paint_path(path, tint(style.color, 0.09));
+        if let Ok(path) = path.build() {
+            window.paint_path(path, tint(style.color, style.alpha));
         }
-    }
-    if let Some(path) = build(style.width) {
-        window.paint_path(path, tint(style.color, style.alpha));
-    }
-    let arm = px(if style.related { 5.5 } else { 4. });
-    let mut arrow = PathBuilder::stroke(px(if style.related { 1.8 } else { 1.1 }));
-    if horizontal {
-        let d = if end.x >= start.x { 1. } else { -1. };
-        arrow.move_to(end + point(-arm * d, -arm));
-        arrow.line_to(end);
-        arrow.line_to(end + point(-arm * d, arm));
+    } else if horizontal {
+        let stroke = px(style.width);
+        let color = tint(style.color, style.alpha);
+        let mid_x = (start.x + end.x) * 0.5;
+        let x1 = start.x.min(mid_x);
+        let w1 = (mid_x - start.x).abs().max(stroke);
+        window.paint_quad(fill(
+            Bounds::new(point(x1, start.y - stroke * 0.5), size(w1, stroke)),
+            color,
+        ));
+        let y_min = start.y.min(end.y);
+        let h_mid = (end.y - start.y).abs().max(stroke);
+        window.paint_quad(fill(
+            Bounds::new(point(mid_x - stroke * 0.5, y_min), size(stroke, h_mid)),
+            color,
+        ));
+        let x2 = mid_x.min(end.x);
+        let w2 = (end.x - mid_x).abs().max(stroke);
+        window.paint_quad(fill(
+            Bounds::new(point(x2, end.y - stroke * 0.5), size(w2, stroke)),
+            color,
+        ));
     } else {
-        let d = if end.y >= start.y { 1. } else { -1. };
-        arrow.move_to(end + point(-arm, -arm * d));
-        arrow.line_to(end);
-        arrow.line_to(end + point(arm, -arm * d));
+        let stroke = px(style.width);
+        let color = tint(style.color, style.alpha);
+        let y_min = start.y.min(end.y);
+        let h = (end.y - start.y).abs().max(stroke);
+        window.paint_quad(fill(
+            Bounds::new(point(start.x - stroke * 0.5, y_min), size(stroke, h)),
+            color,
+        ));
     }
-    if let Ok(path) = arrow.build() {
-        window.paint_path(path, tint(style.color, style.alpha));
+    if style.related {
+        let arm = px(5.5);
+        let mut arrow = PathBuilder::stroke(px(1.8));
+        if horizontal {
+            let d = if end.x >= start.x { 1. } else { -1. };
+            arrow.move_to(end + point(-arm * d, -arm));
+            arrow.line_to(end);
+            arrow.line_to(end + point(-arm * d, arm));
+        } else {
+            let d = if end.y >= start.y { 1. } else { -1. };
+            arrow.move_to(end + point(-arm, -arm * d));
+            arrow.line_to(end);
+            arrow.line_to(end + point(arm, -arm * d));
+        }
+        if let Ok(path) = arrow.build() {
+            window.paint_path(path, tint(style.color, style.alpha));
+        }
     }
     for at in [start, end] {
         let r = if style.related { 3. } else { 2. };

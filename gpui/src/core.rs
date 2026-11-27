@@ -142,6 +142,18 @@ fn metadata(content: &str) -> (String, String, Vec<String>) {
         headings.into_iter().skip(1).take(5).collect(),
     )
 }
+pub fn estimate_tokens(text: &str) -> usize {
+    let mut cjk = 0usize;
+    let mut ascii = 0usize;
+    for ch in text.chars() {
+        if ('　'..='鿿').contains(&ch) || ('＀'..='￯').contains(&ch) {
+            cjk += 1;
+        } else {
+            ascii += 1;
+        }
+    }
+    ((cjk as f32 * 0.7) + (ascii as f32 * 0.25)).ceil() as usize
+}
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }

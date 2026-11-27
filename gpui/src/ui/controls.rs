@@ -38,7 +38,8 @@ pub fn icon_label(id:impl Into<ElementId>,glyph:Icon,label:impl Into<SharedStrin
 }
 pub fn primary_icon(id:impl Into<ElementId>,glyph:Icon,hint:impl Into<SharedString>)->Stateful<Div>{
     let hint=hint.into();
-    button(id,"",false,true).aria_label(hint.clone()).w(px(34.)).h(px(32.)).px(px(0.)).bg(rgb(ACCENT)).hover(|s|s.bg(rgb(0xb0cbef)))
+    div().id(id).aria_label(hint.clone()).w(px(34.)).h(px(32.)).flex_none().flex().items_center().justify_center().rounded(px(5.))
+        .bg(rgb(ACCENT)).cursor(CursorStyle::Arrow).hover(|s|s.bg(rgb(0xb0cbef)))
         .child(icon(glyph).size(px(17.)).text_color(rgb(BG)))
         .tooltip(move|_,cx|cx.new(|_|Hint(hint.clone())).into())
 }

@@ -1,4 +1,4 @@
-use super::{controls::*, theme::*,icons::{icon,Icon,file_icon}};
+use super::{controls::*, theme::*,icons::{icon,Icon}};
 use crate::{layout, role, Studio};
 use gpui::*;
 use super::theme::rgb;
@@ -38,28 +38,32 @@ impl Studio {
         let stages=self.pi_trace.read(cx).graph_stages();
         let metrics=self.pi_trace.read(cx).metric_labels();
         flow_entity.update(cx,|canvas,cx|{canvas.sync(self.graph_revision,graph,cx);canvas.set_trace(paths,stages,metrics,cx);canvas.set_git(git,cx);});
-        panel=panel.child(bar().bg(rgb(PANEL)).child(div().flex_1().min_w(px(0.)).flex().items_center().gap(px(8.)).child(icon(Icon::Graph).text_color(rgb(ACCENT))).child(if self.flow_mode{crate::i18n::text("Skill orchestration")}else{crate::i18n::text("Reference graph")}).child(caption(if self.flow_mode{crate::i18n::text("Document stages · candidate").into()}else{format!("{} nodes · {link_count} links",visible.len())})))
+        let mut mode_switch=div().flex().items_center().gap(px(2.)).p(px(2.)).bg(rgb(BG)).rounded(px(6.)).border_1().border_color(rgb(BORDER));
+        mode_switch=mode_switch
+            .child(icon_label("flow-view",Icon::Branch,crate::i18n::text("Context Budget Map"),self.flow_mode,true).h(px(28.)).px(px(10.)).on_click(cx.listener(|this,_,_,cx|{this.flow_mode=true;cx.notify();})))
+            .child(icon_label("references-view",Icon::Link,crate::i18n::text("Reference graph"),!self.flow_mode,true).h(px(28.)).px(px(10.)).on_click(cx.listener(|this,_,_,cx|{this.flow_mode=false;cx.notify();})));
+        let mut header_bar=bar().h(px(42.)).bg(rgb(PANEL)).child(mode_switch)
+            .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(if self.flow_mode{crate::i18n::text("Sections · token heat").into()}else{format!("{} nodes · {link_count} links",visible.len())}));
+        if !self.flow_mode{
+            let mut scopes=div().flex().gap(px(2.)).p(px(2.)).bg(rgb(BG)).rounded(px(6.));
+            for (i,(scope,glyph,hint)) in [(crate::filter::Scope::Direct,Icon::ArrowRight,"Direct Skill references"),(crate::filter::Scope::Recursive,Icon::Branch,"Recursive Skill references"),(crate::filter::Scope::All,Icon::Layers,"All files")].into_iter().enumerate(){
+                scopes=scopes.child(icon_button(("scope",i),glyph,hint,self.scope==scope,true).h(px(26.)).on_click(cx.listener(move|this,_,_,cx|{this.scope=scope;this.focus=false;cx.notify();})));
+            }
+            header_bar=header_bar.child(separator()).child(scopes)
+                .child(icon_button("focus-selection",Icon::Focus,if self.focus{"Clear focus"}else{"Focus selected file and its references"},self.focus,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.focus=!this.focus;cx.notify();}})))
+                .child(icon_button("missing-toggle",Icon::BrokenLink,if self.show_missing{"Hide broken references"}else{"Show broken references"},self.show_missing,true).on_click(cx.listener(|this,_,_,cx|{this.show_missing=!this.show_missing;cx.notify();})))
+                .child(icon_button("layout-reset",Icon::Layout,"Reset to automatic layout",false,true).on_click(cx.listener(|this,_,_,cx|this.reset_layout(cx))));
+        }
+        header_bar=header_bar.child(div().flex_1())
             .child(icon_button("graph-git-diff",Icon::Diff,if self.git.enabled{"Hide Git Diff · HEAD"}else{"Show Git Diff · HEAD"},self.git.enabled,true).on_click(cx.listener(|this,_,_,cx|{this.git.enabled=!this.git.enabled;cx.notify();})))
-            .child(icon_button("graph-refresh",Icon::Refresh,"Refresh workspace index and clear Debug highlights",false,true).on_click(cx.listener(|this,_,w,cx|this.refresh_graph(w,cx)))));
+            .child(icon_button("graph-refresh",Icon::Refresh,"Refresh workspace index and clear Debug highlights",false,true).on_click(cx.listener(|this,_,w,cx|this.refresh_graph(w,cx))));
+        panel=panel.child(header_bar);
         if self.git.enabled{
             use crate::git_diff::Change;
-            panel=panel.child(div().px(px(10.)).flex().items_center().gap(px(10.)).flex_none().text_size(px(11.)).text_color(rgb(MUTED))
+            panel=panel.child(div().px(px(12.)).py(px(5.)).bg(rgb(PANEL)).border_b_1().border_color(rgb(BORDER)).flex().items_center().gap(px(10.)).flex_none().text_size(px(11.)).text_color(rgb(MUTED))
                 .child(div().flex_1().min_w(px(0.)).truncate().child(self.git_status()))
                 .children([Change::Added,Change::Modified,Change::Deleted].map(|change|div().flex_none().text_color(gpui::rgb(change.color())).child(change.label()))));
         }
-        let mut scopes=div().flex().gap(px(2.)).p(px(2.)).bg(rgb(BG)).rounded(px(6.));
-        for (i,(scope,glyph,hint)) in [(crate::filter::Scope::Direct,Icon::ArrowRight,"Direct Skill references"),(crate::filter::Scope::Recursive,Icon::Branch,"Recursive Skill references"),(crate::filter::Scope::All,Icon::Layers,"All files")].into_iter().enumerate(){
-            scopes=scopes.child(icon_button(("scope",i),glyph,hint,self.scope==scope,true).h(px(26.)).on_click(cx.listener(move|this,_,_,cx|{this.scope=scope;this.focus=false;cx.notify();})));
-        }
-        let mut toolbar=bar().h(px(40.)).child(icon_button("flow-view",Icon::Branch,"Skill orchestration",self.flow_mode,true).on_click(cx.listener(|this,_,_,cx|{this.flow_mode=true;cx.notify();})))
-            .child(icon_button("references-view",Icon::Link,"File references",!self.flow_mode,true).on_click(cx.listener(|this,_,_,cx|{this.flow_mode=false;cx.notify();})));
-        if !self.flow_mode{
-            toolbar=toolbar.child(scopes).child(separator())
-                .child(icon_button("focus-selection",Icon::Focus,if self.focus{"Clear focus"}else{"Focus selected file and its references"},self.focus,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.focus=!this.focus;cx.notify();}})))
-                .child(icon_button("missing-toggle",Icon::BrokenLink,if self.show_missing{"Hide broken references"}else{"Show broken references"},self.show_missing,true).on_click(cx.listener(|this,_,_,cx|{this.show_missing=!this.show_missing;cx.notify();})))
-                .child(div().flex_1()).child(icon_button("layout-reset",Icon::Layout,"Reset to automatic layout",false,true).on_click(cx.listener(|this,_,_,cx|this.reset_layout(cx))));
-        }
-        panel=panel.child(toolbar);
         // Reserve the remaining column height explicitly for the entity.
         if self.flow_mode{panel.child(div().flex_1().min_h(px(0.)).w_full().overflow_hidden().child(flow_entity))}
         else{panel.child(div().flex_1().min_h(px(0.)).w_full().overflow_hidden().child(entity))}
@@ -233,18 +237,31 @@ impl Render for GraphCanvas {
             if previous.size!=bounds.size{app.notify(canvas_id);}
         },move|bounds,_,w,_|{
             if has_graph {visual::graph_background(w,bounds,camera,z);}
+            let b_min_x=bounds.origin.x-px(40.);
+            let b_max_x=bounds.origin.x+bounds.size.width+px(40.);
+            let b_min_y=bounds.origin.y-px(40.);
+            let b_max_y=bounds.origin.y+bounds.size.height+px(40.);
             for (from,to,missing,mut style) in links {
                 let start=bounds.origin+camera+point(px((from.x+264.)*z),px((from.y+94.)*z));
                 let end=bounds.origin+camera+point(px(to.x*z),px((to.y+94.)*z));
+                if start.x.max(end.x)<b_min_x||start.x.min(end.x)>b_max_x||start.y.max(end.y)<b_min_y||start.y.min(end.y)>b_max_y{continue;}
                 if missing&&!style.related{style.color=0xdc8c95;}
                 visual::connection(w,start,end,true,missing,style);
             }
         }).absolute().size_full());
+        let vp_size=self.viewport_bounds.get().size;
+        let vp_w=f32::from(vp_size.width);
+        let vp_h=f32::from(vp_size.height);
+        let cam_x=f32::from(camera.x);
+        let cam_y=f32::from(camera.y);
         for (i,e) in self.references.iter().enumerate() {if let(Some(a),Some(b))=(positions.get(&e.source),positions.get(&e.target)) {
+            let lx=cam_x+(a.x+264.+b.x)*0.5*z;
+            let ly=cam_y+((a.y+b.y)*0.5+94.)*z-10.;
+            if vp_w>0.&&vp_h>0.&&(lx< -120.||lx>vp_w+120.||ly< -60.||ly>vp_h+60.){continue;}
             let group=e.clone();
             let edge_style=visual::edge_style(self.selected.as_deref(),&e.source,&e.target);
             let label=if e.lines.len()==1{format!("L{}",e.lines[0])}else{format!("{} references",e.lines.len())};
-            layer=layer.child(button(("reference",i),label,false,true).absolute().left(camera.x+px((a.x+264.+b.x)*0.5*z)).top(camera.y+px(((a.y+b.y)*0.5+94.)*z-10.)).h(px(20.)).px(px(5.)).text_size(px(9.)).text_color(rgb(if edge_style.related{edge_style.color}else{DIM})).border_1().border_color(rgb(if edge_style.related{edge_style.color}else{BORDER}))
+            layer=layer.child(button(("reference",i),label,false,true).absolute().left(px(lx)).top(px(ly)).h(px(20.)).px(px(5.)).text_size(px(9.)).text_color(rgb(if edge_style.related{edge_style.color}else{DIM})).border_1().border_color(rgb(if edge_style.related{edge_style.color}else{BORDER}))
                 .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
                 .on_click(cx.listener(move|this,_,w,cx|{
                     if group.lines.len()==1 {this.reference(group.source.clone(),group.lines[0],w,cx);}
@@ -252,7 +269,13 @@ impl Render for GraphCanvas {
                 })));
         }}
         for (i,n) in graph.nodes.iter().filter(|n|visible.contains(&n.id)).enumerate(){
-            let p=positions[&n.id];let id=n.id.clone();let click_id=id.clone();let missing=n.kind=="missing";
+            let p=positions[&n.id];
+            if vp_w>0.&&vp_h>0.{
+                let sx=cam_x+p.x*z;
+                let sy=cam_y+p.y*z;
+                if sx+264.*z< -80.||sx>vp_w+80.||sy+188.*z< -80.||sy>vp_h+80.{continue;}
+            }
+            let id=n.id.clone();let click_id=id.clone();let missing=n.kind=="missing";
             let tool=crate::core::is_tool(&n.kind);
             let origin=if matches!(n.kind.as_str(),"cli"|"mcp"){graph.edges.iter().find(|e|e.target==id).map(|e|(e.source.clone(),e.line))}else{None};
             let kind=self.node_roles.get(&n.id).map(String::as_str).unwrap_or("file");let color=if tool{0xd6a875}else{role::color(kind)};let selected=self.group.as_ref().map_or(self.selected.as_deref()==Some(&id),|g|g.contains(&id));
@@ -261,19 +284,24 @@ impl Render for GraphCanvas {
             let summary=meaning.and_then(|m|m.purpose.as_ref()).map(|p|p.text.clone()).unwrap_or_else(||n.summary.clone());
             let context=meaning.and_then(|m|m.condition.as_ref()).map(|p|format!("条件：{}",p.text)).unwrap_or_else(||n.headings.iter().take(3).cloned().collect::<Vec<_>>().join(" · "));
             let count_out=self.outgoing.get(n.id.as_str()).map_or(0,HashSet::len);let count_in=self.incoming.get(n.id.as_str()).map_or(0,HashSet::len);
+            let doc_tokens=graph.flows.iter().find(|f|f.source==n.id).map(|f|f.total_tokens).unwrap_or(0);
             let hint=if kind=="subflow"&&!self.roles.contains_key(&n.id){" · inferred"}else{""};
             if let Some(change)=self.git.as_ref().and_then(|files|files.get(&id)).and_then(|file|file.change){
                 layer=layer.child(super::git_changes::outline(camera.x+px(p.x*z),camera.y+px(p.y*z),px(264.*z),px(188.*z),change));
             }
-            layer=layer.child(div().id(("graph-node",i)).absolute().left(camera.x+px(p.x*z)).top(camera.y+px(p.y*z)).w(px(264.*z)).h(px(188.*z)).flex().flex_col().overflow_hidden().rounded(px(8.)).border_1().border_color(rgb(if selected{visual::INCOMING}else{BORDER})).bg(rgb(if selected{RAISED}else{BG})).shadow_md().cursor(if self.pan.is_some(){CursorStyle::ClosedHand}else{CursorStyle::Arrow}).hover(|s|s.border_color(rgb(color)))
-                .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.))).rounded(px(2.)).bg(rgb(color)))
-                .child(div().flex_1().min_h(px(0.)).px(px(13.*z)).pt(px(10.*z)).flex().flex_col().gap(px(5.*z))
-                    .child(div().flex().items_center().gap(px(5.*z)).text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(color)).child(icon(if tool{Icon::Terminal}else{file_icon(kind)}).size(px(13.*z)).text_color(rgb(color))).child(format!("{}{}",if tool{match n.kind.as_str(){"cli"=>"TOOL · CLI","mcp"=>"TOOL · MCP","script"=>"TOOL · Script",_=>"TOOL · Executable"}}else{role::label(kind)},hint)))
-                    .child(div().h(px(42.*z)).flex_none().overflow_hidden().text_size(px(16.*z)).line_height(px(21.*z)).font_weight(FontWeight::SEMIBOLD).child(title))
-                    .child(div().text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(DIM)).truncate().child(n.id.clone()))
-                    .child(div().h(px(32.*z)).overflow_hidden().text_size(px(12.5*z)).line_height(px(17.*z)).text_color(rgb(0xa3a8b2)).child(summary))
-                    .child(div().text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(DIM)).truncate().child(context)))
-                .child(div().h(px(25.*z)).flex_none().px(px(13.*z)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between().text_size(px(10.5*z)).line_height(px(14.*z)).text_color(rgb(DIM)).child(format!("↗ {count_out} outgoing")).child(format!("↙ {count_in} incoming")))
+            let mut node_card=div().id(("graph-node",i)).absolute().left(camera.x+px(p.x*z)).top(camera.y+px(p.y*z)).w(px(264.*z)).h(px(188.*z)).flex().flex_col().overflow_hidden().rounded(px(10.*z)).border_1().border_color(rgb(if selected{visual::INCOMING}else{BORDER})).bg(rgb(if selected{RAISED}else{0x21242a})).cursor(if self.pan.is_some(){CursorStyle::ClosedHand}else{CursorStyle::Arrow}).hover(|s|s.border_color(rgb(color)));
+            if selected{node_card=node_card.shadow_md();}
+            layer=layer.child(node_card
+                .child(div().flex_1().min_h(px(0.)).px(px(13.*z)).py(px(10.*z)).flex().flex_col().gap(px(4.5*z))
+                    .child(div().h(px(20.*z)).flex_none().flex().items_center().justify_between()
+                        .child(div().flex().items_center().gap(px(5.*z)).text_size(px(10.*z)).line_height(px(14.*z)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(color)).child(div().w(px(6.*z)).h(px(6.*z)).rounded(px(3.*z)).bg(rgb(color))).child(format!("{}{}",if tool{match n.kind.as_str(){"cli"=>"CLI TOOL","mcp"=>"MCP TOOL","script"=>"SCRIPT",_=>"TOOL"}}else{role::label(kind)},hint)))
+                        .children((doc_tokens>0).then(||div().px(px(6.*z)).py(px(1.5*z)).rounded(px(4.*z)).bg(visual::tint(color,0.12)).font_family(MONO_FONT).text_size(px(10.*z)).line_height(px(13.*z)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(format!("{doc_tokens} tok")))))
+                    .child(div().h(px(40.*z)).flex_none().flex().items_center().overflow_hidden().text_size(px(14.5*z)).line_height(px(19.*z)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(title))
+                    .child(div().h(px(5.5*z)).w_full().flex_none().rounded(px(999.)).bg(visual::tint(color,0.14)).overflow_hidden().child(div().h_full().w(px((238.*z*(if doc_tokens>0{(doc_tokens as f32/2000.).clamp(0.15,1.)}else{0.35})).max(8.*z))).rounded(px(999.)).bg(rgb(color))))
+                    .child(div().font_family(MONO_FONT).text_size(px(10.*z)).line_height(px(13.*z)).text_color(rgb(DIM)).truncate().child(n.id.clone()))
+                    .child(div().h(px(32.*z)).overflow_hidden().text_size(px(11.5*z)).line_height(px(16.*z)).text_color(rgb(MUTED)).child(summary))
+                    .child(div().text_size(px(10.5*z)).line_height(px(14.*z)).text_color(rgb(DIM)).truncate().child(context)))
+                .child(div().h(px(24.*z)).flex_none().px(px(13.*z)).border_t_1().border_color(visual::tint(BORDER,0.45)).flex().items_center().justify_between().font_family(MONO_FONT).text_size(px(10.*z)).line_height(px(14.*z)).text_color(rgb(DIM)).child(format!("↗ {count_out} out")).child(format!("↙ {count_in} in")))
                 .on_mouse_down(MouseButton::Left,cx.listener(move|this,e:&MouseDownEvent,w,cx|{this.focus.focus(w,cx);let additive=e.modifiers.control||e.modifiers.platform;
                     this.additive_click=additive;this.drag_moved=false;this.drag=None;
                     let group=this.group.get_or_insert_with(||this.selected.iter().filter(|id|this.visible.contains(*id)).cloned().collect());

@@ -1,12 +1,22 @@
-//! Vertical stage axis with document clicks and breadcrumb-based flow drill-down.
+//! Vertical section & context budget axis with document clicks and breadcrumb drill-down.
 use super::*;
 use crate::flow::{Flow,Call};
 use super::visual;
 use crate::ui::pi_trace::State;
-const CARD_W:f32=350.;
-fn semantic_height(m:&crate::meaning::Meaning)->f32{214.+if m.condition.is_some()||m.confirmation.is_some(){28.}else{0.}+if m.input.is_some(){24.}else{0.}+if m.output.is_some(){24.}else{0.}}
+const CARD_W:f32=340.;
+fn semantic_height(m:&crate::meaning::Meaning)->f32{176.+if m.condition.is_some()||m.confirmation.is_some(){24.}else{0.}+if m.input.is_some(){18.}else{0.}+if m.output.is_some(){18.}else{0.}}
+fn heat_color(tokens:usize,is_doc:bool)->u32{
+ let (ok,mid,warn)=if is_doc{(600,1500,2500)}else{(220,550,1000)};
+ if tokens==0{0x62c7c7}else if tokens<=ok{0x42b883}else if tokens<=mid{0x4ea1ff}else if tokens<=warn{0xe5a54b}else{0xe06c75}
+}
+fn fmt_tok(t:usize)->String{if t>=1000{format!("{:.1}k tok",t as f32/1000.)}else{format!("{t} tok")}}
+fn fmt_num(t:usize)->String{if t>=1000{format!("{:.1}k",t as f32/1000.)}else{t.to_string()}}
 #[derive(Clone)]
-struct Card{id:String,title:String,source:String,line:usize,x:f32,y:f32,h:f32,kind:&'static str,context_source:Option<String>,meaning:crate::meaning::Meaning,evidence:Option<(String,usize)>}
+struct Card{
+ id:String,title:String,source:String,line:usize,x:f32,y:f32,h:f32,kind:&'static str,
+ context_source:Option<String>,meaning:crate::meaning::Meaning,evidence:Option<(String,usize)>,
+ tokens:usize,code_tokens:usize,sub_tokens:usize,share:f32,explicit:bool,
+}
 #[derive(Clone)]
 struct Connection{from:usize,to:usize,side:bool}
 #[derive(Default)]
@@ -16,9 +26,13 @@ impl Diagram{
  fn stage_trace(&self,trace:&HashMap<String,State>)->HashMap<usize,State>{
   let mut owners:HashMap<&str,Option<usize>>=HashMap::new();
   for edge in self.edges.iter().filter(|edge|edge.side){
+   let mut root_stage=edge.from;
+   while self.cards[root_stage].kind!="stage"{
+    if let Some(p)=self.edges.iter().find(|e|e.side&&e.to==root_stage){root_stage=p.from;}else{break;}
+   }
    owners.entry(&self.cards[edge.to].source)
-    .and_modify(|owner|{if *owner!=Some(edge.from){*owner=None;}})
-    .or_insert(Some(edge.from));
+    .and_modify(|owner|{if *owner!=Some(root_stage){*owner=None;}})
+    .or_insert(Some(root_stage));
   }
   let rank=|s:State|match s{State::Running=>4,State::Failed=>3,State::Interrupted|State::Skipped=>2,State::Done=>1};
   let mut stages=HashMap::new();
@@ -36,22 +50,52 @@ impl Diagram{
   if let Some(condition)=&context.condition{meaning.condition=Some(condition.clone());}
   // Contextual condition belongs to the caller; target semantics keep their own source.
   let title=if meaning.action.text.is_empty(){call.title.clone()}else{meaning.action.text.clone()};
-  self.push(Card{id,title,source:call.target.clone(),line:1,x,y,h:semantic_height(&meaning),kind:if call.tool{"tool"}else{"call"},context_source:context.condition.as_ref().map(|_|source.to_string()),meaning,evidence:Some((source.into(),call.line))})
+  let tokens=child.map_or(0,|f|f.total_tokens);
+  let sub_tokens=child.map_or(0,|f|f.ref_tokens);
+  self.push(Card{
+   id,title,source:call.target.clone(),line:1,x,y,h:semantic_height(&meaning),
+   kind:if call.tool{"tool"}else{"call"},context_source:context.condition.as_ref().map(|_|source.to_string()),
+   meaning,evidence:Some((source.into(),call.line)),
+   tokens,code_tokens:0,sub_tokens,share:0.,explicit:false,
+  })
  }
  fn build(flows:&[Flow],root:&Flow)->Self{
   let mut diagram=Self::default();let x=600.;
-  let mut previous=diagram.push(Card{id:root.source.clone(),title:if root.meaning.action.text.is_empty(){root.title.clone()}else{root.meaning.action.text.clone()},source:root.source.clone(),line:1,x,y:20.,h:semantic_height(&root.meaning),kind:if root.entry{"main"}else{"subroot"},context_source:None,meaning:root.meaning.clone(),evidence:None});
+  let mut previous=diagram.push(Card{
+   id:root.source.clone(),
+   title:if root.meaning.action.text.is_empty(){root.title.clone()}else{root.meaning.action.text.clone()},
+   source:root.source.clone(),line:1,x,y:20.,h:semantic_height(&root.meaning),
+   kind:if root.entry{"main"}else{"subroot"},context_source:None,meaning:root.meaning.clone(),evidence:None,
+   tokens:root.total_tokens,code_tokens:root.frontmatter_tokens,sub_tokens:root.ref_tokens,share:1.,explicit:true,
+  });
   let mut y=20.+diagram.cards[previous].h+64.;
   for stage in &root.stages{
    let id=format!("{}/stage/{}",root.source,stage.line);
-   let index=diagram.push(Card{id:id.clone(),title:if stage.meaning.action.text.is_empty(){stage.title.clone()}else{stage.meaning.action.text.clone()},source:root.source.clone(),line:stage.line,x,y,h:semantic_height(&stage.meaning),kind:"stage",context_source:None,meaning:stage.meaning.clone(),evidence:None});
+   let index=diagram.push(Card{
+    id:id.clone(),
+    title:if stage.meaning.action.text.is_empty(){stage.title.clone()}else{stage.meaning.action.text.clone()},
+    source:root.source.clone(),line:stage.line,x,y,h:semantic_height(&stage.meaning),
+    kind:"stage",context_source:None,meaning:stage.meaning.clone(),evidence:None,
+    tokens:stage.tokens,code_tokens:stage.code_tokens,sub_tokens:0,share:stage.share,explicit:stage.explicit,
+   });
    diagram.edges.push(Connection{from:previous,to:index,side:false});previous=index;
-   let mut sides=[y,y];
-   for(i,call)in stage.calls.iter().enumerate(){let side=i%2;let call_x=if side==0{214.}else{1240.};
-    let target=diagram.call(flows,call,format!("{id}/call/{}:{}",call.line,call.target),call_x,sides[side],&root.source,&stage.meaning);
-    diagram.edges.push(Connection{from:index,to:target,side:true});sides[side]+=diagram.cards[target].h+42.;
+   let cols_per_side=if stage.calls.len()>8{2usize}else{1usize};
+   let mut slots=[y;4];
+   let mut col_last:[Option<usize>;4]=[None;4];
+   for(i,call)in stage.calls.iter().enumerate(){
+    let side=i%2;
+    let col=(i/2)%cols_per_side;
+    let slot=side*2+col;
+    let step=CARD_W+44.;
+    let call_x=if side==0{x-76.-CARD_W-(col as f32)*step}else{x+CARD_W+76.+(col as f32)*step};
+    let target=diagram.call(flows,call,format!("{id}/call/{}:{}",call.line,call.target),call_x,slots[slot],&root.source,&stage.meaning);
+    let from_node=if col==0{index}else{col_last[side*2+col-1].unwrap_or(index)};
+    diagram.edges.push(Connection{from:from_node,to:target,side:true});
+    col_last[slot]=Some(target);
+    slots[slot]+=diagram.cards[target].h+32.;
    }
-   y=(y+diagram.cards[index].h+64.).max(sides[0]+20.).max(sides[1]+20.);
+   let max_slot=slots.into_iter().fold(y,f32::max);
+   y=(y+diagram.cards[index].h+64.).max(max_slot+28.);
   }
   diagram
  }
@@ -63,10 +107,10 @@ fn restore(history:&mut Vec<Location>,index:usize)->Option<Location>{let locatio
 pub(crate) struct FlowCanvas{
  git:Option<std::sync::Arc<crate::git_diff::Snapshot>>,
  owner:WeakEntity<Studio>,graph:Option<Graph>,revision:u64,root:Option<String>,history:Vec<Location>,diagram:Diagram,selected:Option<String>,trace:HashMap<String,State>,stage_events:HashMap<(String,String),State>,metrics:HashMap<(String,String),String>,
- camera:Point<Pixels>,zoom:f32,pan:Option<(Point<Pixels>,Point<Pixels>)>,bounds:Rc<Cell<Bounds<Pixels>>>,center_pending:bool,
+ camera:Point<Pixels>,zoom:f32,pan:Option<(Point<Pixels>,Point<Pixels>)>,bounds:Rc<Cell<Bounds<Pixels>>>,last_width:Pixels,center_pending:bool,
 }
 impl FlowCanvas{
- pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{git:None,owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,trace:HashMap::new(),stage_events:HashMap::new(),metrics:HashMap::new(),camera:Point::default(),zoom:0.65,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),center_pending:true}}
+ pub(super) fn new(owner:WeakEntity<Studio>)->Self{Self{git:None,owner,graph:None,revision:u64::MAX,root:None,history:vec![],diagram:Default::default(),selected:None,trace:HashMap::new(),stage_events:HashMap::new(),metrics:HashMap::new(),camera:Point::default(),zoom:0.78,pan:None,bounds:Rc::new(Cell::new(Bounds::default())),last_width:px(0.),center_pending:true}}
  pub(super) fn sync(&mut self,revision:u64,graph:&Graph,cx:&mut Context<Self>){
   if self.revision==revision{return;}let workspace_changed=self.graph.as_ref().is_none_or(|old|old.root!=graph.root);
   self.graph=Some(graph.clone());self.revision=revision;
@@ -92,7 +136,7 @@ impl FlowCanvas{
  fn enter(&mut self,target:&str,cx:&mut Context<Self>){
   if self.root.as_deref()==Some(target)||!self.graph.as_ref().is_some_and(|g|has_flow(&g.flows,Some(target))){return;}
   if let Some(source)=self.root.clone(){self.history.push(Location{source,camera:self.camera,zoom:self.zoom,selected:self.selected.clone()});}
-  self.root=Some(target.into());self.selected=Some(target.into());self.zoom=0.65;self.center_pending=true;self.pan=None;self.rebuild();cx.notify();
+  self.root=Some(target.into());self.selected=Some(target.into());self.zoom=0.78;self.center_pending=true;self.pan=None;self.rebuild();cx.notify();
  }
  fn go_back(&mut self,index:usize,cx:&mut Context<Self>){
   let Some(location)=restore(&mut self.history,index)else{return;};
@@ -103,17 +147,36 @@ impl FlowCanvas{
  fn fit(&mut self,cx:&mut Context<Self>){
   if self.diagram.cards.is_empty(){return;}let bounds=self.bounds.get().size;
   let (x0,y0,x1,y1)=self.diagram.cards.iter().fold((f32::INFINITY,f32::INFINITY,f32::NEG_INFINITY,f32::NEG_INFINITY),|(x0,y0,x1,y1),n|(x0.min(n.x),y0.min(n.y),x1.max(n.x+CARD_W),y1.max(n.y+n.h)));
-  self.zoom=((f32::from(bounds.width)-48.).max(1.)/(x1-x0)).min((f32::from(bounds.height)-48.).max(1.)/(y1-y0)).clamp(MIN_ZOOM,MAX_ZOOM);
-  self.camera=point(bounds.width*0.5-px((x0+x1)*0.5*self.zoom),bounds.height*0.5-px((y0+y1)*0.5*self.zoom));cx.notify();
+  let fit_w=((f32::from(bounds.width)-64.).max(1.)/(x1-x0)).clamp(MIN_ZOOM,MAX_ZOOM);
+  let fit_all=((f32::from(bounds.height)-64.).max(1.)/(y1-y0)).min(fit_w).clamp(MIN_ZOOM,MAX_ZOOM);
+  if fit_all<0.38&&fit_w>=0.38{
+   self.zoom=fit_w.min(0.85);
+   self.camera=point(bounds.width*0.5-px((x0+x1)*0.5*self.zoom),px(22.));
+  }else{
+   self.zoom=fit_all;
+   self.camera=point(bounds.width*0.5-px((x0+x1)*0.5*self.zoom),bounds.height*0.5-px((y0+y1)*0.5*self.zoom));
+  }
+  self.last_width=bounds.width;
+  cx.notify();
  }
 }
 impl Render for FlowCanvas{
  fn render(&mut self,window:&mut Window,cx:&mut Context<Self>)->impl IntoElement{
   let extent=self.bounds.get().size;
-  if self.center_pending&&extent.width>px(0.){self.camera=point(extent.width*0.5-px(760.*self.zoom),px(22.));self.center_pending=false;}
+  if extent.width>px(0.){
+   if self.center_pending||self.last_width!=extent.width{
+    let (x0,x1)=self.diagram.cards.iter().fold((600.0f32,600.+CARD_W),|(x0,x1),n|(x0.min(n.x),x1.max(n.x+CARD_W)));
+    let fit_w=((f32::from(extent.width)-56.).max(1.)/(x1-x0).max(1.)).clamp(0.58,0.85);
+    self.zoom=fit_w;
+    self.camera=point(extent.width*0.5-px((600.+CARD_W*0.5)*self.zoom),if self.center_pending{px(22.)}else{self.camera.y});
+    self.center_pending=false;
+    self.last_width=extent.width;
+   }
+  }
   let z=self.zoom;let camera=self.camera;let bounds_cell=self.bounds.clone();let entity_id=cx.entity().entity_id();
+  let current_flow=self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|Some(&f.source)==self.root.as_ref())).cloned();
   let mut stage_trace=self.diagram.stage_trace(&self.trace);
-  if let Some(flow)=self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|Some(&f.source)==self.root.as_ref())){
+  if let Some(flow)=&current_flow{
    for (i,card) in self.diagram.cards.iter().enumerate().filter(|(_,c)|c.kind=="stage"){
     if let Some(stage)=flow.stages.iter().find(|s|s.line==card.line){
      if flow.stages.iter().filter(|s|s.title==stage.title).count()==1{
@@ -133,78 +196,157 @@ impl Render for FlowCanvas{
   let runtime_color=|state:crate::ui::pi_trace::State|if state==running{0x4e80dd+(((pulse*71.)as u32)<<8)+(pulse*34.)as u32}else{state.color()};
   let segments:Vec<_>=self.diagram.edges.iter().map(|edge|{let a=&self.diagram.cards[edge.from];let b=&self.diagram.cards[edge.to];(a.x,a.y,a.h,b.x,b.y,b.h,edge.side,(if edge.side {self.trace_state(b)}else{None}).map(|state|visual::EdgeStyle{color:runtime_color(state),width:if state==running{2.5+pulse*2.}else{3.},alpha:1.,related:true}).unwrap_or_else(||visual::edge_style(self.selected.as_deref(),&a.id,&b.id)))}).collect();
   let has_graph=!self.diagram.cards.is_empty();
-  let mut content=div().absolute().inset_0().overflow_hidden().child(canvas(move|bounds,_,app|{let old=bounds_cell.replace(bounds);if old.size!=bounds.size{app.notify(entity_id);}},move|bounds,_,window,_|{
+  let last_w=self.last_width;
+  let mut content=div().absolute().inset_0().overflow_hidden().child(canvas(move|bounds,_,app|{let old=bounds_cell.replace(bounds);if old.size!=bounds.size||bounds.size.width!=last_w{app.notify(entity_id);}},move|bounds,_,window,_|{
    if has_graph {visual::graph_background(window,bounds,camera,z);}
+   let b_min_x=bounds.origin.x-px(40.);
+   let b_max_x=bounds.origin.x+bounds.size.width+px(40.);
+   let b_min_y=bounds.origin.y-px(40.);
+   let b_max_y=bounds.origin.y+bounds.size.height+px(40.);
    for(ax,ay,ah,bx,by,bh,side,style)in segments{
     let (from,to)=if side{if bx<ax{((ax,ay+ah*0.5),(bx+CARD_W,by+bh*0.5))}else{((ax+CARD_W,ay+ah*0.5),(bx,by+bh*0.5))}}else{((ax+CARD_W*0.5,ay+ah),(bx+CARD_W*0.5,by))};
     let start=bounds.origin+camera+point(px(from.0*z),px(from.1*z));let end=bounds.origin+camera+point(px(to.0*z),px(to.1*z));
-    visual::connection(window,start,end,side,true,style);
+    if start.x.max(end.x)<b_min_x||start.x.min(end.x)>b_max_x||start.y.max(end.y)<b_min_y||start.y.min(end.y)>b_max_y{continue;}
+    if !side&&!style.related{
+     let spine=bounds.origin+camera+point(px(from.0*z-2.*z),px(from.1*z));
+     let h=end.y-start.y;
+     if h>px(2.){
+      window.paint_quad(fill(Bounds::new(spine,size(px((4.*z).max(2.5)),h)),visual::tint(0x4ea1ff,0.22)).corner_radii(px(2.)));
+     }
+    }
+    visual::connection(window,start,end,side,side,style);
    }
   }).absolute().size_full());
-  let compact=z<0.38;
+  let compact=z<0.42;
+  let view_w=f32::from(extent.width);
+  let view_h=f32::from(extent.height);
+  let cam_x=f32::from(camera.x);
+  let cam_y=f32::from(camera.y);
   for(i,card)in self.diagram.cards.iter().enumerate(){
-   let color=match card.kind{"main"=>0xb5a2ce,"tool"=>0xd6a875,"subroot"|"call"=>0x62c7c7,_=>0x4ea1ff};
-   let (label,glyph)=match card.kind{"main"=>("MAIN SKILL",Icon::Skill),"subroot"=>("SUBFLOW ROOT",Icon::Skill),"call"=>("SUBFLOW",Icon::Branch),"tool"=>(if card.source.starts_with("cli:"){"TOOL · CLI"}else if card.source.starts_with("mcp:"){"TOOL · MCP"}else{"TOOL"},Icon::Terminal),_=>("PHASE / STEP",Icon::Layers)};
-   let runtime=states[i];let selected=self.selected.as_deref()==Some(card.id.as_str());let border=runtime.map(runtime_color).unwrap_or(if selected{visual::INCOMING}else{BORDER});
+   if view_w>0.&&view_h>0.{
+    let sx=cam_x+card.x*z;
+    let sy=cam_y+card.y*z;
+    let sw=CARD_W*z;
+    let sh=card.h*z;
+    if sx+sw< -80.||sx>view_w+80.||sy+sh< -80.||sy>view_h+80.{continue;}
+   }
+   let is_doc=matches!(card.kind,"main"|"subroot"|"call");
+   let color=match card.kind{
+    "main"=>0xb5a2ce,
+    "tool"=>0xd6a875,
+    "subroot"|"call"=>if card.tokens>0{heat_color(card.tokens,true)}else{0x62c7c7},
+    _=>heat_color(card.tokens,false),
+   };
+   let (label,_glyph)=match card.kind{
+    "main"=>("SKILL ENTRY",Icon::Skill),
+    "subroot"=>("SUBFLOW",Icon::Skill),
+    "call"=>("REFERENCE",Icon::Branch),
+    "tool"=>(if card.source.starts_with("cli:"){"CLI TOOL"}else if card.source.starts_with("mcp:"){"MCP TOOL"}else{"TOOL"},Icon::Terminal),
+    _=>if card.explicit{("STEP",Icon::Layers)}else{("SECTION",Icon::Layers)},
+   };
+   let runtime=states[i];let selected=self.selected.as_deref()==Some(card.id.as_str());
+   let heavy=(!is_doc&&card.tokens>600)||(is_doc&&card.tokens>2000);
+   let heat_border=if card.tokens>0{visual::tint(color,if heavy{0.68}else{0.26})}else{rgb(BORDER)};
+   let border_rgba=runtime.map(|s|rgb(runtime_color(s))).unwrap_or(if selected{rgb(visual::INCOMING)}else{heat_border});
    let (path,line)=if card.kind=="tool"&&(card.source.starts_with("cli:")||card.source.starts_with("mcp:")){card.evidence.clone().unwrap_or((card.source.clone(),card.line))}else{(card.source.clone(),card.line.max(1))};let click_path=path.clone();let click_line=line;let is_call=card.kind=="call";
    let select_id=card.id.clone();let source_id=card.id.clone();
    let filename=card.source.rsplit('/').next().unwrap_or(&card.source).to_string();
-   let mut footer=div().h(px((26.*z).max(24.))).flex_none().flex().items_center().justify_between().gap(px(4.*z)).border_t_1().border_color(rgb(BORDER)).pt(px(4.*z));
-   footer=footer.child(icon_button(("flow-source",i),Icon::File,format!("Open source · {} · line {line}",card.source),false,true).w(px((24.*z).max(20.))).h(px((22.*z).max(18.)))
-    .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(source_id.clone());cx.notify();this.source(path.clone(),line,w,cx);} )));
-   if let Some((source,line))=&card.evidence{let source=source.clone();let line=*line;let evidence_id=card.id.clone();
-    footer=footer.child(icon_button(("flow-evidence",i),Icon::Link,format!("Open call site · {source} · line {line}"),false,true).w(px((24.*z).max(20.))).h(px((22.*z).max(18.))).on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(evidence_id.clone());cx.notify();this.source(source.clone(),line,w,cx);} )));
+   let mut actions=div().flex_none().flex().items_center().gap(px(5.*z)).font_family(MONO_FONT);
+   if card.code_tokens>0&&card.kind=="stage"{
+    actions=actions.child(div().px(px(5.5*z)).py(px(1.5*z)).rounded(px(4.*z)).bg(visual::tint(0xd6a875,0.13)).text_size(px(9.5*z)).line_height(px(13.*z)).text_color(rgb(0xd6a875)).child(format!("code {}",fmt_num(card.code_tokens))));
    }
-   let mut background=rgb(if selected{RAISED}else{BG});
+   if let Some((source,ev_line))=&card.evidence{let source=source.clone();let ev_line=*ev_line;let evidence_id=card.id.clone();
+    let src_name=source.rsplit('/').next().unwrap_or(&source);
+    let cite_label=if src_name==filename{format!("↗ 引用 L{ev_line}")}else{format!("↗ {src_name}:{ev_line}")};
+    actions=actions.child(div().id(("flow-evidence",i)).px(px(6.5*z)).py(px(1.5*z)).rounded(px(4.*z)).bg(visual::tint(color,0.12)).border_1().border_color(visual::tint(color,0.28)).text_size(px(9.5*z)).line_height(px(13.*z)).text_color(rgb(color)).cursor(CursorStyle::PointingHand).hover(|s|s.bg(visual::tint(color,0.22)).border_color(rgb(color)).text_color(rgb(TEXT))).child(cite_label)
+     .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(evidence_id.clone());cx.notify();this.source(source.clone(),ev_line,w,cx);})));
+   }else{
+    actions=actions.child(div().px(px(5.5*z)).py(px(1.*z)).rounded(px(3.5*z)).bg(visual::tint(color,0.08)).text_size(px(9.5*z)).line_height(px(13.*z)).text_color(rgb(MUTED)).child(format!("L{line}")));
+   }
+   let footer=div().h(px(24.*z)).flex_none().flex().items_center().justify_between().gap(px(6.*z)).border_t_1().border_color(visual::tint(BORDER,0.45)).pt(px(3.*z))
+    .child(div().id(("flow-source",i)).flex_1().min_w(px(0.)).flex().items_center().gap(px(5.*z)).font_family(MONO_FONT).text_size(px(10.*z)).line_height(px(14.*z)).text_color(rgb(MUTED)).cursor(CursorStyle::PointingHand).hover(|s|s.text_color(rgb(TEXT)))
+     .child(icon(Icon::File).size(px(11.*z)).text_color(rgb(color)))
+     .child(div().truncate().child(filename.clone()))
+     .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(source_id.clone());cx.notify();this.source(path.clone(),line,w,cx);})))
+    .child(actions);
+   let mut background=rgb(if selected{RAISED}else{0x21242a});
    if let Some(state)=runtime{
     let tint=gpui::rgb(runtime_color(state));
-    let strength=if state==running{0.22+pulse*0.16}else{0.22};
+    let strength=if state==running{0.18+pulse*0.14}else{0.18};
+    background.r+=(tint.r-background.r)*strength;
+    background.g+=(tint.g-background.g)*strength;
+    background.b+=(tint.b-background.b)*strength;
+   }else{
+    let tint=gpui::rgb(color);
+    let strength=if heavy{0.065}else{0.025};
     background.r+=(tint.r-background.r)*strength;
     background.g+=(tint.g-background.g)*strength;
     background.b+=(tint.b-background.b)*strength;
    }
+   let (hero_val,hero_unit,sub_metric)=match card.kind{
+    "main"|"subroot"=>(fmt_num(card.tokens),"tok",if card.sub_tokens>0{format!("+{} lazy",fmt_num(card.sub_tokens))}else{"entry".into()}),
+    "call"=>(if card.tokens>0{format!("+{}",fmt_num(card.tokens))}else{format!("L{}",card.line)},if card.tokens>0{"tok"}else{""},if card.sub_tokens>0{format!("∑{}",fmt_num(card.tokens+card.sub_tokens))}else{String::new()}),
+    "stage"=>(if card.tokens>0{fmt_num(card.tokens)}else{format!("L{}",card.line)},if card.tokens>0{"tok"}else{""},if card.tokens>0{format!("{:.0}%",card.share*100.)}else{String::new()}),
+    _=>(format!("L{}",card.line),"",String::new()),
+   };
+   let bar_ratio=match card.kind{
+    "stage"=>card.share.clamp(0.05,1.),
+    "main"|"subroot"|"call"=>(card.tokens as f32/2000.).clamp(0.08,1.),
+    _=>0.,
+   };
+   let code_ratio=if card.kind=="stage"&&card.tokens>0{(card.code_tokens as f32/card.tokens as f32).clamp(0.,1.)}else{0.};
    let mut card_view=div().id(SharedString::from(format!("flow-card:{}",card.id))).absolute().left(camera.x+px(card.x*z)).top(camera.y+px(card.y*z))
-    .w(px(CARD_W*z)).h(px(card.h*z)).bg(background).rounded(px(9.)).border_color(rgb(border)).overflow_hidden().flex().flex_col().cursor(CursorStyle::Arrow).shadow_md();
+    .w(px(CARD_W*z)).h(px(card.h*z)).bg(background).rounded(px(11.*z)).border_color(border_rgba).overflow_hidden().flex().flex_col().cursor(CursorStyle::Arrow);
+   if selected||runtime.is_some(){card_view=card_view.shadow_md();}
    card_view=if selected||runtime.is_some(){card_view.border_2()}else{card_view.border_1()};
+   let track_w=(CARD_W-28.)*z;
+   let fill_w=(track_w*bar_ratio).max(if bar_ratio>0.{6.*z}else{0.});
+   let code_w=fill_w*code_ratio;
    card_view=card_view
-    .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.)+if runtime==Some(running){pulse*4.}else{0.})).rounded(px(2.)).bg(rgb(runtime.map(runtime_color).unwrap_or(color))))
-    .child(div().flex_1().min_h(px(0.)).px(px(15.*z)).py(px(11.*z)).flex().flex_col().gap(px(5.*z))
-     .child(div().h(px(18.*z)).flex_none().flex().items_center().justify_between().line_height(px((13.*z).max(10.)))
-      .child(div().flex().items_center().gap(px(5.*z)).text_color(rgb(color)).text_size(px((10.*z).max(8.))).font_weight(FontWeight::SEMIBOLD)
-       .child(icon(glyph).size(px((13.*z).max(9.))).text_color(rgb(color))).child(if runtime==Some(crate::ui::pi_trace::State::Running){crate::i18n::text("● RUNNING")}else if runtime==Some(State::Skipped){crate::i18n::text("SKIPPED")}else{label}))
-      .child(div().text_size(px((10.*z).max(8.))).text_color(rgb(if selected{visual::INCOMING}else{DIM})).child(if selected{"SELECTED".into()}else{format!("L{}",card.line)})))
-     .child(div().h(px(if compact{45.*z}else{44.*z})).flex_none().overflow_hidden().text_size(px((16.*z).max(8.))).line_height(px((21.*z).max(10.))).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(card.title.clone()))
+    .child(div().flex_1().min_h(px(0.)).px(px(14.*z)).py(px(11.*z)).flex().flex_col().gap(px(5.5*z))
+     .child(div().h(px(21.*z)).flex_none().flex().items_center().justify_between()
+      .child(div().flex().items_center().gap(px(5.5*z)).text_color(rgb(color)).text_size(px(10.5*z)).line_height(px(14.*z)).font_weight(FontWeight::SEMIBOLD)
+       .child(div().w(px(6.5*z)).h(px(6.5*z)).rounded(px(3.5*z)).bg(rgb(runtime.map(runtime_color).unwrap_or(color))))
+       .child(if runtime==Some(crate::ui::pi_trace::State::Running){crate::i18n::text("● RUNNING")}else if runtime==Some(State::Skipped){crate::i18n::text("SKIPPED")}else{crate::i18n::text(label)}))
+      .child(div().flex().items_baseline().gap(px(3.5*z)).px(px(7.5*z)).py(px(2.*z)).rounded(px(5.*z)).bg(visual::tint(color,if heavy{0.18}else{0.11})).font_family(MONO_FONT)
+       .child(div().text_size(px(12.*z)).line_height(px(15.*z)).font_weight(FontWeight::BOLD).text_color(rgb(if selected{visual::INCOMING}else{TEXT})).child(hero_val))
+       .children((!hero_unit.is_empty()).then(||div().text_size(px(9.5*z)).line_height(px(13.*z)).text_color(rgb(color)).child(hero_unit)))
+       .children((!sub_metric.is_empty()).then(||div().ml(px(3.*z)).text_size(px(9.5*z)).line_height(px(13.*z)).text_color(rgb(MUTED)).child(format!("· {sub_metric}"))))))
+     .child(div().h(px(if compact{44.*z}else{40.*z})).flex_none().flex().items_center().overflow_hidden().text_size(px(14.5*z)).line_height(px(19.*z)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(card.title.clone()))
+     .children((!compact&&bar_ratio>0.).then(||div().h(px(6.*z)).w(px(track_w)).flex_none().rounded(px(999.)).bg(visual::tint(color,0.14)).relative().overflow_hidden()
+      .child(div().h_full().w(px(fill_w.max(6.*z))).rounded(px(999.)).bg(rgb(runtime.map(runtime_color).unwrap_or(color))))
+      .children((code_w>2.*z).then(||div().absolute().top_0().left(px((fill_w-code_w).max(0.))).h_full().w(px(code_w.max(4.*z))).rounded(px(999.)).bg(rgb(0xd6a875))))))
      .children((!compact).then(||{
       let purpose=card.meaning.purpose.as_ref();let purpose_path=card.source.clone();let purpose_id=card.id.clone();
       let purpose_line=purpose.map_or(card.line,|p|p.line);
-      div().id(("card-purpose",i)).h(px(48.*z)).flex_none().overflow_hidden().text_size(px((11.*z).max(9.))).line_height(px((16.*z).max(12.))).text_color(rgb(MUTED))
-       .child(format!("{}：{}",if card.meaning.purpose_explicit{"目的"}else{"原文"},purpose.map(|p|p.text.as_str()).unwrap_or("暂无明确说明，请查看来源文档")))
+      let summary_text=purpose.map(|p|p.text.clone()).unwrap_or_else(||if is_doc{format!("双击进入子视图 · 单击打开 {}",filename)}else{format!("第 {} 行章节内容",card.line)});
+      div().id(("card-purpose",i)).flex_1().min_h(px(0.)).overflow_hidden().text_size(px(11.5*z)).line_height(px(16.*z)).text_color(rgb(MUTED))
+       .child(summary_text)
        .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
        .on_click(cx.listener(move|this,event:&ClickEvent,w,cx|{cx.stop_propagation();this.selected=Some(purpose_id.clone());let opened=this.source(purpose_path.clone(),purpose_line,w,cx);if opened&&is_call&&event.click_count()>1{this.enter(&purpose_path,cx);}cx.notify();}))
      }))
      .children((!compact&&(card.meaning.condition.is_some()||card.meaning.confirmation.is_some())).then(||{
-      let mut tags=div().h(px(24.*z)).flex_none().flex().items_center().gap(px(4.*z)).overflow_hidden();
+      let mut tags=div().h(px(20.*z)).flex_none().flex().items_center().gap(px(5.*z)).overflow_hidden().font_family(MONO_FONT);
       if let Some(condition)=&card.meaning.condition{
        let path=card.context_source.clone().unwrap_or_else(||card.source.clone());let line=condition.line;let id=card.id.clone();
-       let label:String=condition.text.chars().take(10).collect();
-       tags=tags.child(button(("card-condition",i),format!("条件 · {label}"),false,true).max_w(px(170.*z)).h(px((22.*z).max(16.))).px(px(5.*z)).text_size(px((9.*z).max(8.))).bg(visual::tint(0x62c7c7,0.12)).text_color(rgb(0x62c7c7))
+       let label:String=condition.text.chars().take(16).collect();
+       tags=tags.child(div().id(("card-condition",i)).max_w(px(205.*z)).h(px(18.*z)).px(px(6.*z)).rounded(px(4.*z)).bg(visual::tint(0x62c7c7,0.12)).border_1().border_color(visual::tint(0x62c7c7,0.3)).text_size(px(9.*z)).line_height(px(13.*z)).text_color(rgb(0x62c7c7)).flex().items_center().truncate().cursor(CursorStyle::PointingHand).hover(|s|s.border_color(rgb(0x62c7c7))).child(format!("WHEN · {label}"))
         .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(id.clone());this.source(path.clone(),line,w,cx);cx.notify();})));
       }
       if let Some(confirmation)=&card.meaning.confirmation{
        let path=card.source.clone();let line=confirmation.line;let id=card.id.clone();
-       tags=tags.child(button(("card-confirmation",i),"需用户确认",false,true).h(px((22.*z).max(16.))).px(px(5.*z)).text_size(px((9.*z).max(8.))).bg(visual::tint(WARNING,0.12)).text_color(rgb(WARNING))
+       tags=tags.child(div().id(("card-confirmation",i)).h(px(18.*z)).px(px(6.*z)).rounded(px(4.*z)).bg(visual::tint(WARNING,0.14)).border_1().border_color(visual::tint(WARNING,0.32)).text_size(px(9.*z)).line_height(px(13.*z)).text_color(rgb(WARNING)).flex().items_center().cursor(CursorStyle::PointingHand).hover(|s|s.border_color(rgb(WARNING))).child("CONFIRM")
         .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(id.clone());this.source(path.clone(),line,w,cx);cx.notify();})));
       }tags
      }))
      .children((!compact).then(||{
-      let mut io=div().flex_none().flex().flex_col().gap(px(3.*z));
-      for (label,value)in [("输入",card.meaning.input.as_ref()),("输出",card.meaning.output.as_ref())]{if let Some(value)=value{
+      let mut io=div().flex_none().flex().flex_col().gap(px(2.*z));
+      for (label,value)in [("IN",card.meaning.input.as_ref()),("OUT",card.meaning.output.as_ref())]{if let Some(value)=value{
        let path=card.source.clone();let line=value.line;let id=card.id.clone();
-       io=io.child(div().id(SharedString::from(format!("card-io:{}:{label}",card.id))).h(px(21.*z)).overflow_hidden().text_size(px((10.*z).max(9.))).line_height(px((14.*z).max(11.))).text_color(rgb(MUTED)).truncate().child(format!("{label}：{}",value.text))
+       io=io.child(div().id(SharedString::from(format!("card-io:{}:{label}",card.id))).h(px(16.*z)).overflow_hidden().font_family(MONO_FONT).text_size(px(9.5*z)).line_height(px(13.*z)).text_color(rgb(DIM)).truncate().child(format!("{label}  {}",value.text))
         .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation()).on_click(cx.listener(move|this,_,w,cx|{cx.stop_propagation();this.selected=Some(id.clone());this.source(path.clone(),line,w,cx);cx.notify();})));
       }}io
      }))
-     .children((!compact).then(||div().flex_1().min_h(px(0.)).flex().items_end().text_size(px((10.*z).max(8.))).text_color(rgb(DIM)).truncate().child(filename)))
      .children((!compact).then_some(footer)))
     .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
     .on_click(cx.listener(move|this,event:&ClickEvent,w,cx|{
@@ -241,32 +383,63 @@ impl Render for FlowCanvas{
    }
   }
   if self.diagram.cards.is_empty(){content=content.child(div().size_full().flex().items_center().justify_center().text_color(rgb(MUTED)).child(crate::i18n::text("No SKILL.md entry found. Switch to References or open a Skill workspace.")));}
-  let mut choices=div().flex().items_center().gap(px(5.)).overflow_hidden();
-  if let Some(graph)=&self.graph{for(i,root)in graph.flows.iter().filter(|f|f.entry).enumerate(){let id=root.source.clone();choices=choices.child(button(("flow-root",i),root.title.clone(),Some(&id)==self.root.as_ref(),true).max_w(px(240.)).on_click(cx.listener(move|this,_,_,cx|{this.root=Some(id.clone());this.selected=None;this.history.clear();this.center_pending=true;this.rebuild();cx.notify();})));}}
-  let mut trail=div().id("flow-breadcrumbs").flex().items_center().gap(px(4.)).overflow_x_scroll().h(px(30.));
+  let entry_roots:Vec<_>=self.graph.as_ref().map(|g|g.flows.iter().filter(|f|f.entry).collect()).unwrap_or_default();
+  let mut nav_left=div().flex().items_center().gap(px(8.)).min_w(px(0.)).overflow_hidden();
+  if entry_roots.len()>1{
+   for(i,root)in entry_roots.iter().enumerate(){
+    let id=root.source.clone();
+    nav_left=nav_left.child(button(("flow-root",i),format!("{} ({})",root.title,fmt_tok(root.total_tokens)),Some(&id)==self.root.as_ref(),true).h(px(28.)).max_w(px(240.)).on_click(cx.listener(move|this,_,_,cx|{this.root=Some(id.clone());this.selected=None;this.history.clear();this.center_pending=true;this.rebuild();cx.notify();})));
+   }
+   nav_left=nav_left.child(separator());
+  }
+  let mut trail=div().id("flow-breadcrumbs").flex().items_center().gap(px(6.)).min_w(px(0.)).overflow_x_scroll();
   if !self.history.is_empty(){
    let last=self.history.len()-1;
-   trail=trail.child(icon_button("flow-back",Icon::ArrowLeft,"Return to parent graph",false,true).on_click(cx.listener(move|this,_,_,cx|this.go_back(last,cx))));
+   trail=trail.child(icon_button("flow-back",Icon::ArrowLeft,"Return to parent graph",false,true).w(px(26.)).h(px(26.)).on_click(cx.listener(move|this,_,_,cx|this.go_back(last,cx))));
   }
   for (i,location)in self.history.iter().enumerate(){
    let title=self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|f.source==location.source)).map(|f|f.title.clone()).unwrap_or_else(||location.source.clone());
-   trail=trail.child(button(("flow-crumb",i),title,false,true).max_w(px(200.)).on_click(cx.listener(move|this,_,_,cx|this.go_back(i,cx)))).child(caption("›"));
+   trail=trail.child(button(("flow-crumb",i),title,false,true).h(px(26.)).max_w(px(200.)).on_click(cx.listener(move|this,_,_,cx|this.go_back(i,cx)))).child(caption("›"));
   }
-  let current=self.graph.as_ref().and_then(|g|g.flows.iter().find(|f|Some(&f.source)==self.root.as_ref())).map(|f|f.title.clone()).unwrap_or_else(||"No flow".into());
-  trail=trail.child(div().text_size(px(12.)).text_color(rgb(ACCENT)).child(current));
+  if let Some(f)=&current_flow{
+   trail=trail.child(div().h(px(28.)).flex().items_center().gap(px(7.)).px(px(10.)).rounded(px(6.)).bg(rgb(RAISED)).border_1().border_color(rgb(BORDER))
+    .child(icon(Icon::Skill).size(px(13.)).text_color(rgb(ACCENT)))
+    .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(f.title.clone()))
+    .child(div().font_family(MONO_FONT).text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(rgb(ACCENT)).child(fmt_tok(f.total_tokens))));
+  }
+  nav_left=nav_left.child(trail);
+  let header_strip=if let Some(f)=&current_flow{
+   let l0_color=if f.frontmatter_tokens>250{0xe06c75}else if f.frontmatter_tokens>150{0xe5a54b}else{0x42b883};
+   let l1_color=heat_color(f.body_tokens,true);
+   let total_reach=(f.total_tokens+f.ref_tokens).max(1);
+   let deferred_pct=((f.ref_tokens as f32/total_reach as f32)*100.).round() as usize;
+   div().flex_none().h(px(42.)).px(px(14.)).bg(rgb(PANEL)).border_b_1().border_color(rgb(BORDER)).flex().items_center().justify_between().gap(px(12.))
+    .child(nav_left)
+    .child(div().flex_none().flex().items_center().gap(px(8.)).font_family(MONO_FONT).text_size(px(11.5))
+     .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(l0_color,0.13)).border_1().border_color(visual::tint(l0_color,0.28)).text_color(rgb(l0_color)).font_weight(FontWeight::SEMIBOLD).flex().items_center().child(format!("L0 {}",fmt_tok(f.frontmatter_tokens))))
+     .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(l1_color,0.13)).border_1().border_color(visual::tint(l1_color,0.28)).text_color(rgb(l1_color)).font_weight(FontWeight::SEMIBOLD).flex().items_center().child(format!("L1·{}s {}",f.stages.len(),fmt_tok(f.body_tokens))))
+     .child(div().flex_none().h(px(26.)).px(px(9.)).rounded(px(5.)).bg(visual::tint(0x62c7c7,0.13)).border_1().border_color(visual::tint(0x62c7c7,0.28)).text_color(rgb(0x62c7c7)).font_weight(FontWeight::SEMIBOLD).flex().items_center().child(format!("L2·{}r +{} ({deferred_pct}% lazy)",f.ref_files,fmt_num(f.ref_tokens))))
+     .child(div().w(px(1.)).h(px(16.)).bg(rgb(BORDER)))
+     .child(div().flex_none().flex().items_center().gap(px(8.)).font_family(UI_FONT).text_size(px(11.5)).text_color(rgb(MUTED))
+      .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0x42b883))).child("Light"))
+      .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0x4ea1ff))).child("Normal"))
+      .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0xe5a54b))).child("Heavy"))
+      .child(div().flex().items_center().gap(px(4.)).child(div().w(px(7.)).h(px(7.)).rounded(px(3.5)).bg(rgb(0xe06c75))).child("Bloated"))))
+  }else{
+   div().flex_none().h(px(42.)).px(px(14.)).bg(rgb(PANEL)).border_b_1().border_color(rgb(BORDER)).flex().items_center().text_size(px(12.)).text_color(rgb(MUTED)).child(crate::i18n::text("Context Budget Map: inspect section token weights and progressive disclosure costs."))
+  };
   let view=div().id("flow-camera").flex_1().min_h(px(0.)).relative().overflow_hidden().child(content)
    .on_mouse_down(MouseButton::Left,cx.listener(|this,_,_,cx|{this.selected=None;cx.notify();}))
    .on_mouse_down(MouseButton::Right,cx.listener(|this,e:&MouseDownEvent,w,cx|{this.pan=Some((e.position,this.camera));w.prevent_default();cx.stop_propagation();cx.notify();}))
-   .on_mouse_move(cx.listener(|this,e:&MouseMoveEvent,_,cx|{if e.pressed_button==Some(MouseButton::Right){if let Some((start,offset))=this.pan{this.camera=pan_offset(offset,e.position-start);cx.notify();}}else{this.pan=None;}}))
-   .on_mouse_up(MouseButton::Right,cx.listener(|this,_,_,cx|{this.pan=None;cx.notify();})).on_mouse_up_out(MouseButton::Right,cx.listener(|this,_,_,cx|{this.pan=None;cx.notify();}))
+   .on_mouse_move(cx.listener(|this,e:&MouseMoveEvent,_,cx|{if e.pressed_button==Some(MouseButton::Right){if let Some((start,offset))=this.pan{this.camera=pan_offset(offset,e.position-start);cx.notify();}}else if this.pan.take().is_some(){cx.notify();}}))
+   .on_mouse_up(MouseButton::Right,cx.listener(|this,_,_,cx|{if this.pan.take().is_some(){cx.notify();}})).on_mouse_up_out(MouseButton::Right,cx.listener(|this,_,_,cx|{if this.pan.take().is_some(){cx.notify();}}))
    .on_scroll_wheel(cx.listener(|this,e:&ScrollWheelEvent,w,cx|{w.prevent_default();cx.stop_propagation();if this.pan.is_none(){let anchor=e.position-this.bounds.get().origin;this.zoom_at(wheel_zoom(this.zoom,f32::from(e.delta.pixel_delta(px(20.)).y)),anchor,cx);}}))
-   .child(div().absolute().bottom(px(14.)).left(px(14.)).flex().gap(px(4.)).p(px(4.)).rounded(px(7.)).bg(rgb(PANEL)).occlude()
-    .child(icon_button("flow-home",Icon::Skill,"Return to main axis",false,true).on_click(cx.listener(|this,_,_,cx|{this.zoom=0.65;this.center_pending=true;cx.notify();})))
+   .child(div().absolute().bottom(px(14.)).left(px(14.)).flex().items_center().gap(px(4.)).p(px(4.)).rounded(px(7.)).bg(rgb(PANEL)).border_1().border_color(rgb(BORDER)).occlude()
+    .child(icon_button("flow-home",Icon::Skill,"Return to main axis",false,true).on_click(cx.listener(|this,_,_,cx|{this.center_pending=true;cx.notify();})))
     .child(icon_button("flow-fit",Icon::Focus,"Fit all flow nodes",false,true).on_click(cx.listener(|this,_,_,cx|this.fit(cx))))
     .child(caption(format!("{:.0}%",z*100.))));
   div().size_full().flex().flex_col().bg(rgb(CANVAS))
-   .child(div().flex_none().px(px(10.)).py(px(7.)).flex().flex_col().gap(px(4.)).border_b_1().border_color(rgb(BORDER))
-    .child(choices).child(trail).child(div().text_size(px(10.)).text_color(rgb(WARNING)).child(crate::i18n::text("候选流程：按文档阶段顺序排列；调用边来自引用，不代表已确认的执行、条件或返回关系。"))))
+   .child(header_strip)
    .child(view)
  }
 }
@@ -293,8 +466,8 @@ mod stage_trace_tests{
  use super::*;
  fn flows()->Vec<Flow>{
   let call=|target:&str|crate::flow::Call{target:target.into(),title:target.into(),line:4,tool:false};
-  let root=Flow{source:"SKILL.md".into(),title:"主技能".into(),entry:true,meaning:Default::default(),stages:vec![crate::flow::Stage{title:"Step 1".into(),line:2,summary:String::new(),meaning:Default::default(),calls:vec![call("a.md"),call("b.md")]},crate::flow::Stage{title:"Step 2".into(),line:8,summary:String::new(),meaning:Default::default(),calls:vec![call("a.md")]}]};
-  let child=Flow{source:"a.md".into(),title:"A".into(),entry:false,meaning:Default::default(),stages:vec![crate::flow::Stage{title:"子流程检查".into(),line:16,summary:String::new(),meaning:Default::default(),calls:vec![call("SKILL.md")]}]};
+  let root=Flow{source:"SKILL.md".into(),title:"主技能".into(),entry:true,meaning:Default::default(),stages:vec![crate::flow::Stage{title:"Step 1".into(),line:2,summary:String::new(),meaning:Default::default(),calls:vec![call("a.md"),call("b.md")],..Default::default()},crate::flow::Stage{title:"Step 2".into(),line:8,summary:String::new(),meaning:Default::default(),calls:vec![call("a.md")],..Default::default()}],..Default::default()};
+  let child=Flow{source:"a.md".into(),title:"A".into(),entry:false,meaning:Default::default(),stages:vec![crate::flow::Stage{title:"子流程检查".into(),line:16,summary:String::new(),meaning:Default::default(),calls:vec![call("SKILL.md")],..Default::default()}],..Default::default()};
   vec![root,child]
  }
  #[::core::prelude::v1::test]fn axis_and_calls_do_not_embed_child_stages(){

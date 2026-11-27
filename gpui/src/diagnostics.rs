@@ -117,6 +117,41 @@ pub fn check(graph: &Graph) -> Vec<Diagnostic> {
         });
     }
 
+    for flow in &graph.flows {
+        if flow.entry && flow.frontmatter_tokens > 250 {
+            result.push(Diagnostic {
+                severity: Severity::Warning,
+                code: "SR401",
+                file: flow.source.clone(),
+                line: Some(1),
+                message: format!("Frontmatter budget high (~{} tokens > 250)", flow.frontmatter_tokens),
+                detail: "L0 frontmatter is injected into the system prompt on every turn. Keep name and description concise.".into(),
+            });
+        }
+        if flow.entry && flow.body_tokens > 2_000 {
+            result.push(Diagnostic {
+                severity: Severity::Warning,
+                code: "SR402",
+                file: flow.source.clone(),
+                line: Some(1),
+                message: format!("Entry Skill body is heavy (~{} tokens > 2,000)", flow.body_tokens),
+                detail: "Move detailed tables, examples or edge cases into references/*.md for progressive disclosure.".into(),
+            });
+        }
+        for stage in &flow.stages {
+            if stage.line > 0 && stage.tokens > 600 && stage.calls.is_empty() {
+                result.push(Diagnostic {
+                    severity: Severity::Info,
+                    code: "SR403",
+                    file: flow.source.clone(),
+                    line: Some(stage.line),
+                    message: format!("Heavy inline section ‘{}’ (~{} tokens, {:.0}% of doc)", stage.title, stage.tokens, stage.share * 100.),
+                    detail: "This section carries substantial context without delegating to a reference file. Consider extracting it.".into(),
+                });
+            }
+        }
+    }
+
     result.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.file.cmp(&b.file)).then_with(|| a.line.cmp(&b.line)).then_with(|| a.code.cmp(b.code)));
     result
 }
@@ -138,5 +173,29 @@ mod tests {
         assert!(items.iter().any(|d| d.code == "SR001" && d.line == Some(9)));
         assert!(items.iter().any(|d| d.code == "SR101" && d.file == "orphan.md"));
         assert!(items.iter().any(|d| d.code == "SR201"));
+    }
+    #[test]
+    fn reports_context_budget_diagnostics_for_bloated_frontmatter_body_and_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let big_desc = "触发描述 ".repeat(120);
+        let big_sec = "详细内联说明文本，没有任何外部链接拆分。".repeat(160);
+        let content = format!("---
+name: heavy-skill
+description: {big_desc}
+---
+# Heavy
+
+触发条件：测试。
+
+## 臃肿章节
+
+{big_sec}
+");
+        std::fs::write(dir.path().join("SKILL.md"), content).unwrap();
+        let graph = crate::core::open_workspace(dir.path()).unwrap();
+        let items = check(&graph);
+        assert!(items.iter().any(|d| d.code == "SR401"));
+        assert!(items.iter().any(|d| d.code == "SR402"));
+        assert!(items.iter().any(|d| d.code == "SR403"));
     }
 }

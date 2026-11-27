@@ -63,7 +63,9 @@ impl Studio {
             .child(separator())
             .child(icon_button("window-minimize",Icon::Minus,"Minimize window",false,true).w(px(38.)).h_full().rounded(px(0.)).on_click(|_,w,_|w.minimize_window()))
             .child(icon_button("window-maximize",if window.is_maximized(){Icon::Restore}else{Icon::Maximize},if window.is_maximized(){"Restore window"}else{"Maximize window"},false,true).w(px(38.)).h_full().rounded(px(0.)).on_click(|_,w,_|toggle_maximize(w)))
-            .child(icon_button("window-close",Icon::Close,"Close window · unsaved tabs are protected",false,true).w(px(42.)).h_full().rounded(px(0.)).hover(|s|s.bg(rgb(0xc7444e)))
+            .child(div().id("window-close").aria_label("Close window · unsaved tabs are protected").group("icon-button").w(px(42.)).h_full().flex_none().flex().items_center().justify_center().bg(rgb(PANEL)).cursor(CursorStyle::Arrow).hover(|s|s.bg(rgb(0xc7444e)))
+                .child(super::icons::icon(Icon::Close).size(px(15.)).text_color(rgb(MUTED)).group_hover("icon-button",|s|s.text_color(rgb(TEXT))))
+                .tooltip(|_,cx|cx.new(|_|Hint("Close window · unsaved tabs are protected".into())).into())
                 .on_click(cx.listener(|this,_,w,cx|{if this.request_close(w,cx){w.remove_window();}})))
     }
     pub(super) fn pane_handle(&self,divider:Divider,id:&'static str,cx:&mut Context<Self>)->Stateful<Div>{
