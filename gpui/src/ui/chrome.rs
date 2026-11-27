@@ -48,15 +48,16 @@ fn toggle_maximize(window:&Window){
 impl Studio {
     pub(super) fn titlebar(&self,window:&Window,cx:&mut Context<Self>)->Div{
         let drag=div().id("window-drag").flex_1().min_w(px(0.)).h_full().flex().items_center().gap(px(10.)).window_control_area(WindowControlArea::Drag)
-            .child(app_logo().size(px(26.))).child(div().font_weight(FontWeight::SEMIBOLD).child("skill studio"))
-            .child(div().flex_1().min_w(px(0.)))
+            .child(div().flex_1().min_w(px(0.)).text_center().font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).truncate().child(concat!("Skill Studio | Author: ", env!("CARGO_PKG_AUTHORS"))))
             .on_mouse_down(MouseButton::Left,|_,_window,_|{
                 #[cfg(not(target_os="windows"))] _window.start_window_move();
             })
             .on_click(|_event,_window,_|{
                 #[cfg(not(target_os="windows"))] if _event.click_count()>1{_window.zoom_window();}
             });
-        div().h(px(44.)).flex_none().pl(px(12.)).flex().items_center().gap(px(4.)).border_b_1().border_color(rgb(BORDER)).bg(rgb(PANEL))
+        div().h(px(super::menu::TITLE_HEIGHT)).flex_none().pl(px(8.)).flex().items_center().gap(px(0.)).border_b_1().border_color(rgb(BORDER)).bg(rgb(PANEL))
+            .child(div().w(px(28.)).flex_none().flex().items_center().child(app_logo().size(px(26.))))
+            .child(self.title_menus(cx))
             .child(drag)
 
             .child(separator())

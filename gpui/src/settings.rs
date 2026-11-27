@@ -5,8 +5,8 @@ pub const THEMES: &[&str] = &["graphite", "ink", "moss", "paper"];
 pub const ACCENTS: &[(&str,u32)] = &[("Blue",0x96b2d7),("Violet",0xb5a2ce),("Teal",0x8cbdc3),("Green",0xa6bd91),("Amber",0xd8be87),("Rose",0xdc8c95)];
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Settings {pub theme:String,pub accent:u32,pub font_size:u16,pub terminal_font_size:u16,pub terminal_line_height:f32,pub soft_wrap:bool,pub line_numbers:bool,pub pi_launcher:String}
-impl Default for Settings {fn default()->Self {Self {theme:"graphite".into(),accent:ACCENTS[0].1,font_size:14,terminal_font_size:14,terminal_line_height:1.,soft_wrap:true,line_numbers:true,pi_launcher:String::new()}}}
+pub struct Settings {pub language:crate::i18n::Language,pub theme:String,pub accent:u32,pub font_size:u16,pub terminal_font_size:u16,pub terminal_line_height:f32,pub soft_wrap:bool,pub line_numbers:bool,pub pi_launcher:String}
+impl Default for Settings {fn default()->Self {Self {language:Default::default(),theme:"graphite".into(),accent:ACCENTS[0].1,font_size:14,terminal_font_size:14,terminal_line_height:1.,soft_wrap:true,line_numbers:true,pi_launcher:String::new()}}}
 impl Settings {
  pub fn validate(&self)->Result<(),String> {
   if !THEMES.contains(&self.theme.as_str()) {return Err("Unknown theme preset".into());}

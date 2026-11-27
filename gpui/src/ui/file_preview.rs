@@ -13,7 +13,7 @@ impl Studio{
                     .child(img(data.clone()).size_full().object_fit(ObjectFit::Contain))))
                     .child(div().h(px(34.)).flex_none().px(px(14.)).flex().items_center().justify_between().border_t_1().border_color(rgb(BORDER))
                         .child(caption(format!("{width} × {height} · {}",crate::files::size(stamp.bytes))))
-                        .child(caption("Read-only · first frame")));
+                        .child(caption(crate::i18n::text("Read-only · first frame"))));
             }
             View::Unsupported{stamp,reason}=>{
                 let ext=std::path::Path::new(id).extension().and_then(|s|s.to_str()).unwrap_or("FILE").to_ascii_uppercase();
@@ -23,13 +23,13 @@ impl Studio{
                     .child(div().max_w(px(380.)).truncate().font_weight(FontWeight::SEMIBOLD).text_size(px(15.)).child(file))
                     .child(caption(format!("{} · 只读",crate::files::size(stamp.bytes))))
                     .child(div().w_full().max_w(px(400.)).text_size(px(12.5)).line_height(px(21.)).text_color(rgb(MUTED)).child(reason.clone()))
-                    .child(div().text_size(px(10.5)).text_color(rgb(DIM)).child("源文件未修改 · 未自动转码 · 不会自动执行")));
+                    .child(div().text_size(px(10.5)).text_color(rgb(DIM)).child(crate::i18n::text("源文件未修改 · 未自动转码 · 不会自动执行"))));
             }
             View::Text=>return body,
         }
         let path=self.graph.as_ref().map(|g|std::path::Path::new(&g.root).join(id));
         body.child(div().h(px(38.)).px(px(14.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between()
-            .child(caption("FILE PREVIEW"))
+            .child(caption(crate::i18n::text("FILE PREVIEW")))
             .child(icon_button("reveal-local-file",Icon::FolderOpen,"在文件夹中显示，不执行文件",false,path.is_some()).on_click(cx.listener(move|this,_,w,cx|{if let Some(path)=&path{this.reveal_in_file_manager(path.clone(),w,cx);}}))))
     }
 }

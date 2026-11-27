@@ -50,7 +50,7 @@ impl Studio {
                     .items_center()
                     .justify_center()
                     .text_color(rgb(MUTED))
-                    .child("No problems match the active filters"),
+                    .child(crate::i18n::text("No problems match the active filters")),
             );
         } else {
             for (index, diagnostic) in self
@@ -86,11 +86,7 @@ impl Studio {
                         .border_color(rgb(BORDER))
                         .flex()
                         .gap(px(9.))
-                        .cursor(if file.is_empty() {
-                            CursorStyle::Arrow
-                        } else {
-                            CursorStyle::PointingHand
-                        })
+                        .cursor(CursorStyle::Arrow)
                         .hover(|s| s.bg(rgb(HOVER)))
                         .child(icon(glyph).size(px(14.)).mt(px(2.)).text_color(rgb(color)))
                         .child(
@@ -162,7 +158,7 @@ impl Studio {
                         div()
                             .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Problems"),
+                            .child(crate::i18n::text("Problems")),
                     )
                     .children(
                         [

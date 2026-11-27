@@ -113,7 +113,7 @@ impl GraphCanvas {
         div().absolute().right(px(16.)).bottom(px(16.)).w(px(WIDTH)).rounded(px(11.)).overflow_hidden().bg(rgb(POPOVER)).border_1().border_color(rgb(BORDER)).shadow_lg().occlude()
             .child(div().h(px(30.)).px(px(10.)).flex().items_center().gap(px(6.)).border_b_1().border_color(rgb(BORDER))
                 .child(icon(Icon::Graph).size(px(12.)).text_color(rgb(ACCENT)))
-                .child(div().flex_1().text_size(px(9.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(MUTED)).child("OVERVIEW"))
+                .child(div().flex_1().text_size(px(9.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(MUTED)).child(crate::i18n::text("OVERVIEW")))
                 .child(icon_button("overview-fit",Icon::Focus,"Fit all nodes",false,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|this.fit_all(cx))))
                 .child(icon_button("collapse-overview",Icon::Minus,"Collapse overview",false,true).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|{this.minimap.collapsed=true;cx.notify();}))))
             .child(map)

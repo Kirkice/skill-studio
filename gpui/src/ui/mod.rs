@@ -1,4 +1,5 @@
 mod controls;
+mod menu;
 pub mod theme;
 pub mod icons;
 pub(crate) mod graph;
@@ -27,17 +28,18 @@ impl Studio {
             +if self.explorer_visible{0.}else{self.panes.workspace+crate::panes::Panes::HANDLE}
     }
 
+    fn toggle_explorer(&mut self,w:&mut Window,cx:&mut Context<Self>){
+        if !self.composition_ready(w,cx){return;}
+        self.explorer_visible=!self.explorer_visible;self.explorer_menu=None;self.panes.cancel();self.focus_handle.focus(w,cx);cx.notify();
+    }
+
     fn activity_rail(&self,cx:&mut Context<Self>)->Div {
         let debug=self.pi_trace.read(cx).active();
         let enabled=self.graph.is_some()||debug;
         let stop_debug=debug&&self.terminal_visible&&self.pi_trace_visible;
         let debug_hint=if stop_debug{"Stop Debug"}else if debug{"Return to Debug terminal"}else{"Start Debug"};
         div().w(px(Self::ACTIVITY_WIDTH)).h_full().flex_none().flex().flex_col().items_center().gap(px(6.)).pt(px(8.)).bg(rgb(PANEL)).border_r_1().border_color(rgb(BORDER))
-            .child(sized_icon_button("activity-explorer",Icon::Explorer,if self.explorer_visible{"Collapse Explorer"}else{"Show Explorer"},self.explorer_visible,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|{
-                if !this.composition_ready(w,cx){return;}
-                this.explorer_visible=!this.explorer_visible;this.explorer_menu=None;this.panes.cancel();this.focus_handle.focus(w,cx);cx.notify();
-            })))
-            .child(sized_icon_button("activity-open",Icon::FolderOpen,"Open workspace",false,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.open(w,cx))))
+            .child(sized_icon_button("activity-explorer",Icon::Explorer,if self.explorer_visible{"Collapse Explorer"}else{crate::i18n::text("Show Explorer")},self.explorer_visible,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.toggle_explorer(w,cx))))            .child(sized_icon_button("activity-open",Icon::FolderOpen,crate::i18n::text("Open workspace"),false,true,24.).size(px(38.)).on_click(cx.listener(|this,_,w,cx|this.open(w,cx))))
             .child(button("activity-debug","",debug,enabled).size(px(38.)).px(px(0.)).aria_label(debug_hint)
                 .child(icon(if stop_debug{Icon::Stop}else if debug{Icon::Terminal}else{Icon::Play}).size(px(24.)).text_color(rgb(if stop_debug{0xdc8c95}else if debug{GREEN}else if enabled{MUTED}else{DIM})))
                 .tooltip(move|_,cx|cx.new(|_|Hint(debug_hint.into())).into())
@@ -96,7 +98,7 @@ impl Studio {
                 let label=if duplicates{id.rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/")}else{filename.into()};
                 let label=if tab.pinned{label}else{format!("{label} · preview")};
                 tabs=tabs.child(div().id(("document-tab",tab.token)).h_full().flex_none().max_w(px(260.)).px(px(10.)).flex().items_center().gap(px(6.))
-                    .bg(rgb(if active{BG}else{PANEL})).border_b_2().border_color(rgb(if active{ACCENT}else{PANEL})).cursor_pointer()
+                    .bg(rgb(if active{BG}else{PANEL})).border_b_2().border_color(rgb(if active{ACCENT}else{PANEL})).cursor(CursorStyle::Arrow)
                     .child(icon(if matches!(tab.view,crate::files::View::Image{..}){Icon::Image}else{Icon::File}).size(px(13.)).text_color(rgb(DIM)))
                     .child(div().max_w(px(185.)).truncate().text_size(px(12.)).child(label))
                     .children(dirty.then(||div().text_color(rgb(WARNING)).child("●")))
@@ -116,7 +118,7 @@ impl Studio {
             .children((text&&!preview).then(||icon_button("editor-wrap",Icon::Wrap,"Toggle word wrap",self.preferences.soft_wrap,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.soft_wrap=!this.preferences.soft_wrap;this.apply_preferences(w,cx);}))))
             .children((text&&!preview).then(||icon_button("editor-numbers",Icon::Numbers,"Toggle line numbers",self.preferences.line_numbers,self.selected.is_some()).on_click(cx.listener(|this,_,w,cx|{this.preferences.line_numbers=!this.preferences.line_numbers;this.apply_preferences(w,cx);}))))
 
-            .child(icon_button("document-menu",Icon::More,"Document actions",false,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.document_menu=!this.document_menu;cx.notify();}}))));
+            .child(icon_button("document-menu",Icon::More,crate::i18n::text("Document actions"),false,self.selected.is_some()).on_click(cx.listener(|this,_,_,cx|{if this.selected.is_some(){this.document_menu=!this.document_menu;cx.notify();}}))));
         if let Some(id)=&self.selected {
             panel=panel.child(div().px(px(14.)).py(px(8.)).text_size(px(11.5)).text_color(rgb(DIM)).truncate().child(id.clone()));
             if self.conflict {
@@ -138,7 +140,7 @@ impl Studio {
                     .capture_key_down(cx.listener(|this,event:&KeyDownEvent,_,cx|{if event.keystroke.key=="enter"{this.editor.update(cx,|s,cx|s.next_search_match(cx));cx.stop_propagation();}})));
             }
             if preview{
-                panel=panel.child(div().px(px(10.)).flex().items_center().gap(px(8.)).child(caption("Markdown preview · read only"))
+                panel=panel.child(div().px(px(10.)).flex().items_center().gap(px(8.)).child(caption(crate::i18n::text("Markdown preview · read only")))
                     .child(icon_label("edit-markdown-source",Icon::Code,"Edit source",false,true).on_click(cx.listener(|this,_,w,cx|this.toggle_preview(w,cx)))))
                     .child(self.markdown_preview(cx));
             }else{
@@ -149,10 +151,10 @@ impl Studio {
             let kind=self.graph.as_ref().and_then(|g|g.nodes.iter().find(|n|&n.id==id).map(|n|role::role(n,g,&self.roles))).unwrap_or("file");
             panel=panel.child(div().h(px(32.)).flex_none().px(px(10.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between()
                 .child(icon_label("node-role",file_icon(kind),role::label(kind),self.role_menu,true).child(icon(Icon::ChevronDown).size(px(12.))).text_color(rgb(role::color(kind))).on_click(cx.listener(|this,_,_,cx|{this.role_menu=!this.role_menu;cx.notify();})))
-                .child(caption(if preview{"Rendered Markdown".into()}else{format!("Ln {}, Col {} · UTF-8",cursor.line+1,cursor.character+1)})));
+                .child(caption(if preview{crate::i18n::text("Rendered Markdown").into()}else{format!("Ln {}, Col {} · UTF-8",cursor.line+1,cursor.character+1)})));
         } else {
             panel=panel.child(div().flex_1().flex().flex_col().items_center().justify_center().gap(px(10.)).text_color(rgb(MUTED))
-                .child(icon(Icon::File).size(px(32.))).child("Select a file").child(div().text_size(px(11.)).child("Open a document from the graph or workspace")));
+                .child(icon(Icon::File).size(px(32.))).child(crate::i18n::text("Select a file")).child(div().text_size(px(11.)).child(crate::i18n::text("Open a document from the graph or workspace"))));
         }
         panel
     }
@@ -174,7 +176,7 @@ impl Studio {
                 list=list.child(icon_label(("command-row",i),command_icon(command),command.label(),i==self.palette_index,enabled).w_full().h(px(34.)).justify_start()
                     .on_click(cx.listener(move|this,_,w,cx|{if enabled{this.command(command,w,cx)}})));
             }
-            if rows.is_empty(){list=list.child(div().p(px(20.)).text_color(rgb(MUTED)).child("No matching commands"));}
+            if rows.is_empty(){list=list.child(div().p(px(20.)).text_color(rgb(MUTED)).child(crate::i18n::text("No matching commands")));}
             dialog=dialog.child(list).child(div().px(px(14.)).py(px(10.)).border_t_1().border_color(rgb(BORDER)).text_size(px(10.)).text_color(rgb(MUTED)).child("↑ ↓ Navigate    Enter Run    Esc Close"))
                 .capture_key_down(cx.listener(|this,event:&KeyDownEvent,w,cx|{
                     let query=this.command_search.read(cx).value().to_lowercase();
@@ -186,7 +188,7 @@ impl Studio {
                     }
                 }));
         } else if self.creating {
-            dialog=dialog.child(div().p(px(20.)).flex().flex_col().gap(px(14.)).child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child("New Skill"))
+            dialog=dialog.child(div().p(px(20.)).flex().flex_col().gap(px(14.)).child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(crate::i18n::text("New Skill")))
                 .child(div().text_color(rgb(MUTED)).child("Create a folder and SKILL.md. Use lowercase letters, numbers and hyphens."))
                 .child(input("new-skill-name",&self.skill_name)).child(div().text_size(px(11.)).text_color(rgb(WARNING)).child(self.status.clone()))
                 .child(div().flex().justify_end().gap(px(8.)).child(icon_button("cancel-create",Icon::Close,"Cancel · Esc",false,true).on_click(cx.listener(|this,_,w,cx|this.close_overlay(w,cx))))
@@ -200,7 +202,7 @@ impl Studio {
                     .on_click(cx.listener(move|this,_,_,cx|{if let Some(id)=&this.selected{if kind=="auto"{this.roles.remove(id);}else{this.roles.insert(id.clone(),kind.into());}this.role_menu=false;this.save_layout(cx);}})));
             }
         } else {
-            dialog=dialog.child(div().p(px(16.)).child(caption("Document actions")))
+            dialog=dialog.child(div().p(px(16.)).child(caption(crate::i18n::text("Document actions"))))
                 .child(icon_label("close-current-tab",Icon::Close,"Close current tab",false,self.selected.is_some()).mx(px(8.)).mb(px(6.)).justify_start().on_click(cx.listener(|this,_,w,cx|{this.document_menu=false;if let Some(id)=this.selected.clone(){this.close_tab(id,w,cx);}})))
                 .child(icon_label("close-other-saved-tabs",Icon::File,"Close other saved tabs",false,true).mx(px(8.)).mb(px(6.)).justify_start().on_click(cx.listener(|this,_,_,cx|{this.document_menu=false;this.close_other_saved_tabs(cx);})))
                 .child(icon_label("doc-reload",Icon::Refresh,"Reload from disk",false,true).mx(px(8.)).mb(px(6.)).justify_start().on_click(cx.listener(|this,_,w,cx|{this.document_menu=false;this.reload(w,cx);})))
@@ -271,10 +273,11 @@ impl Render for Studio {
                 .border_2().border_color(rgb(ACCENT)).flex().items_center().justify_center()
                 .child(div().mx(px(20.)).p(px(28.)).rounded(px(14.)).border_1().border_color(rgb(ACCENT)).bg(rgb(POPOVER)).shadow_lg().flex().flex_col().items_center().gap(px(12.))
                     .child(icon(Icon::FolderOpen).size(px(36.)).text_color(rgb(ACCENT)))
-                    .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child("松开鼠标以打开文件或文件夹"))
-                    .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child("文件夹打开工作区 · 文件按内容类型打开"))
-                    .child(div().text_size(px(11.)).text_color(rgb(GREEN)).child("只打开 · 不复制 · 不自动执行")))))
+                    .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(crate::i18n::text("松开鼠标以打开文件或文件夹")))
+                    .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(crate::i18n::text("文件夹打开工作区 · 文件按内容类型打开")))
+                    .child(div().text_size(px(11.)).text_color(rgb(GREEN)).child(crate::i18n::text("只打开 · 不复制 · 不自动执行"))))))
             .children(overlay)
             .children(explorer_menu)
+            .children(self.title_menu_popup(window,cx))
     }
 }

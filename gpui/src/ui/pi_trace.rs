@@ -411,7 +411,7 @@ struct TraceDetails {
 impl Render for TraceDetails {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(trace) = self.trace.upgrade() else {
-            return div().size_full().child("Pi Trace is unavailable");
+            return div().size_full().child(crate::i18n::text("Pi Trace is unavailable"));
         };
         let trace = trace.read(cx);
         div()
@@ -424,7 +424,7 @@ impl Render for TraceDetails {
             .child(
                 bar()
                     .bg(rgb(PANEL))
-                    .child(caption("Pi Trace"))
+                    .child(caption(crate::i18n::text("Pi Trace")))
                     .child(
                         div()
                             .flex_1()
@@ -445,7 +445,7 @@ impl Render for TraceDetails {
                     .p(px(8.))
                     .border_t_1()
                     .border_color(rgb(BORDER))
-                    .child(caption("Run telemetry"))
+                    .child(caption(crate::i18n::text("Run telemetry")))
                     .children(
                         trace
                             .telemetry
@@ -464,7 +464,7 @@ impl PiTraceView {
         }
     }
 
-    fn show_details(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn show_details(&mut self, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         cx.defer(move |cx| {
             let Some(trace) = weak.upgrade() else {
@@ -540,7 +540,7 @@ impl PiTraceView {
                 div()
                     .p(px(12.))
                     .text_color(rgb(MUTED))
-                    .child("No tool calls recorded yet."),
+                    .child(crate::i18n::text("No tool calls recorded yet.")),
             );
         }
         rows

@@ -10,13 +10,14 @@ pub(crate) mod flow;
 use std::{cell::Cell, rc::Rc};
 
 impl Studio {
+    pub(super) fn refresh_graph(&mut self,w:&mut Window,cx:&mut Context<Self>){self.pi_trace.update(cx,|trace,cx|trace.clear_graph_highlights(cx));self.refresh(w,cx);}
     pub(super) fn graph_view(&mut self, visible:&HashSet<String>,cx:&mut Context<Self>)->Div {
         let mut panel=div().size_full().min_w(px(0.)).overflow_hidden().bg(rgb(CANVAS)).flex().flex_col();
         let Some(graph)=&self.graph else {
-            return panel.child(bar().child(caption("Reference graph"))).child(div().flex_1().flex().flex_col().items_center().justify_center().gap(px(16.))
+            return panel.child(bar().child(caption(crate::i18n::text("Reference graph")))).child(div().flex_1().flex().flex_col().items_center().justify_center().gap(px(16.))
                 .child(icon(Icon::Graph).size(px(44.)).text_color(rgb(ACCENT)))
-                .child(div().text_size(px(21.)).font_weight(FontWeight::SEMIBOLD).child("Start with a workspace"))
-                .child(div().text_color(rgb(MUTED)).child("Explore references between Skills, documents and scripts."))
+                .child(div().text_size(px(21.)).font_weight(FontWeight::SEMIBOLD).child(crate::i18n::text("Start with a workspace")))
+                .child(div().text_color(rgb(MUTED)).child(crate::i18n::text("Explore references between Skills, documents and scripts.")))
                 .child(primary_icon("welcome-open",Icon::FolderOpen,"Open workspace").h(px(34.)).on_click(cx.listener(|this,_,w,cx|this.open(w,cx)))));
         };
 
@@ -32,9 +33,9 @@ impl Studio {
         let stages=self.pi_trace.read(cx).graph_stages();
         let metrics=self.pi_trace.read(cx).metric_labels();
         flow_entity.update(cx,|canvas,cx|{canvas.sync(self.graph_revision,graph,cx);canvas.set_trace(paths,stages,metrics,cx);canvas.set_git(git,cx);});
-        panel=panel.child(bar().bg(rgb(PANEL)).child(div().flex_1().min_w(px(0.)).flex().items_center().gap(px(8.)).child(icon(Icon::Graph).text_color(rgb(ACCENT))).child(if self.flow_mode{"Skill orchestration"}else{"Reference graph"}).child(caption(if self.flow_mode{"Document stages · candidate".into()}else{format!("{} nodes · {link_count} links",visible.len())})))
+        panel=panel.child(bar().bg(rgb(PANEL)).child(div().flex_1().min_w(px(0.)).flex().items_center().gap(px(8.)).child(icon(Icon::Graph).text_color(rgb(ACCENT))).child(if self.flow_mode{crate::i18n::text("Skill orchestration")}else{crate::i18n::text("Reference graph")}).child(caption(if self.flow_mode{crate::i18n::text("Document stages · candidate").into()}else{format!("{} nodes · {link_count} links",visible.len())})))
             .child(icon_button("graph-git-diff",Icon::Diff,if self.git.enabled{"Hide Git Diff · HEAD"}else{"Show Git Diff · HEAD"},self.git.enabled,true).on_click(cx.listener(|this,_,_,cx|{this.git.enabled=!this.git.enabled;cx.notify();})))
-            .child(icon_button("graph-refresh",Icon::Refresh,"Refresh workspace index and clear Debug highlights",false,true).on_click(cx.listener(|this,_,w,cx|{this.pi_trace.update(cx,|trace,cx|trace.clear_graph_highlights(cx));this.refresh(w,cx);}))));
+            .child(icon_button("graph-refresh",Icon::Refresh,"Refresh workspace index and clear Debug highlights",false,true).on_click(cx.listener(|this,_,w,cx|this.refresh_graph(w,cx)))));
         if self.git.enabled{
             use crate::git_diff::Change;
             panel=panel.child(div().px(px(10.)).flex().items_center().gap(px(10.)).flex_none().text_size(px(11.)).text_color(rgb(MUTED))
@@ -193,20 +194,12 @@ impl Render for GraphCanvas {
 
         let links:Vec<_>=self.references.iter().filter_map(|e|Some((*positions.get(&e.source)?,*positions.get(&e.target)?,e.missing,visual::edge_style(self.selected.as_deref(),&e.source,&e.target)))).collect();
 
+        let has_graph=!visible.is_empty();
         let mut layer=div().absolute().inset_0().overflow_hidden().child(canvas(move|bounds,_,app|{
             let previous=viewport_bounds.replace(bounds);
             if previous.size!=bounds.size{app.notify(canvas_id);}
         },move|bounds,_,w,_|{
-            // Paint only the viewport; the world has no scroll bounds.
-            let spacing=(28.*z).max(14.);
-            let x0=f32::from(camera.x).rem_euclid(spacing);
-            let y0=f32::from(camera.y).rem_euclid(spacing);
-            for x in 0..((f32::from(bounds.size.width)/spacing).ceil() as usize+1){
-                for y in 0..((f32::from(bounds.size.height)/spacing).ceil() as usize+1){
-                    let p=bounds.origin+point(px(x0+x as f32*spacing),px(y0+y as f32*spacing));
-                    w.paint_quad(fill(Bounds::new(p,size(px(1.),px(1.))),rgb(0x2b2e35)));
-                }
-            }
+            if has_graph {visual::graph_background(w,bounds,camera,z);}
             for (from,to,missing,mut style) in links {
                 let start=bounds.origin+camera+point(px((from.x+264.)*z),px((from.y+94.)*z));
                 let end=bounds.origin+camera+point(px(to.x*z),px((to.y+94.)*z));
@@ -237,7 +230,7 @@ impl Render for GraphCanvas {
             if let Some(change)=self.git.as_ref().and_then(|files|files.get(&id)).and_then(|file|file.change){
                 layer=layer.child(super::git_changes::outline(camera.x+px(p.x*z),camera.y+px(p.y*z),px(264.*z),px(188.*z),change));
             }
-            layer=layer.child(div().id(("graph-node",i)).absolute().left(camera.x+px(p.x*z)).top(camera.y+px(p.y*z)).w(px(264.*z)).h(px(188.*z)).flex().flex_col().overflow_hidden().rounded(px(8.)).border_1().border_color(rgb(if selected{visual::INCOMING}else{BORDER})).bg(rgb(if selected{RAISED}else{BG})).shadow_md().cursor(if self.pan.is_some(){CursorStyle::ClosedHand}else{CursorStyle::PointingHand}).hover(|s|s.border_color(rgb(color)))
+            layer=layer.child(div().id(("graph-node",i)).absolute().left(camera.x+px(p.x*z)).top(camera.y+px(p.y*z)).w(px(264.*z)).h(px(188.*z)).flex().flex_col().overflow_hidden().rounded(px(8.)).border_1().border_color(rgb(if selected{visual::INCOMING}else{BORDER})).bg(rgb(if selected{RAISED}else{BG})).shadow_md().cursor(if self.pan.is_some(){CursorStyle::ClosedHand}else{CursorStyle::Arrow}).hover(|s|s.border_color(rgb(color)))
                 .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.))).rounded(px(2.)).bg(rgb(color)))
                 .child(div().flex_1().min_h(px(0.)).px(px(13.*z)).pt(px(10.*z)).flex().flex_col().gap(px(5.*z))
                     .child(div().flex().items_center().gap(px(5.*z)).text_size(px(11.*z)).line_height(px(14.*z)).text_color(rgb(color)).child(icon(file_icon(kind)).size(px(13.*z)).text_color(rgb(color))).child(format!("{}{}",role::label(kind),hint)))
@@ -301,7 +294,7 @@ impl Render for GraphCanvas {
         if let Some(group)=self.reference_menu.clone(){
             let mut menu=div().id("reference-menu").occlude().w(px(300.)).max_h(px(320.)).overflow_y_scroll().p(px(10.)).bg(rgb(POPOVER)).border_1().border_color(rgb(BORDER)).rounded(px(8.)).flex().flex_col().gap(px(5.))
                 .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
-                .child(caption("Select reference location"));
+                .child(caption(crate::i18n::text("Select reference location")));
             for line in group.lines {
                 let source=group.source.clone();
                 menu=menu.child(button(("reference-line",line),format!("Line {line}"),false,true).on_click(cx.listener(move|this,_,w,cx|this.reference(source.clone(),line,w,cx))));

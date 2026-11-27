@@ -94,11 +94,11 @@ impl Studio {
         Some(div().id("explorer-context-menu").absolute().left(px(x)).top(px(y)).w(px(246.)).p(px(6.)).rounded(px(8.)).border_1().border_color(rgb(BORDER)).bg(rgb(POPOVER)).shadow_lg().occlude()
             .child(div().h(px(24.)).px(px(8.)).truncate().text_size(px(11.)).text_color(rgb(DIM)).child(name))
             .child(div().h(px(1.)).my(px(4.)).bg(rgb(BORDER)))
-            .child(action("explorer-rename-action",Icon::Replace,"Rename",operations).on_click(cx.listener({let (root,path)=(root.clone(),path.clone());move|this,_,w,cx|if operations{this.begin_rename(root.clone(),path.clone(),w,cx);}})))
-            .child(action("explorer-delete",Icon::Close,"Delete",operations).on_click(cx.listener({let (root,path)=(root.clone(),path.clone());move|this,_,w,cx|if operations{this.explorer_menu=None;this.delete_entry(root.clone(),path.clone(),w,cx);cx.notify();}})))
-            .child(action("explorer-copy",Icon::Copy,"Copy",operations).on_click(cx.listener({let path=path.clone();move|this,_,_,cx|if operations{this.explorer_menu=None;this.copy_entry(path.clone(),cx);}})))
-            .child(action("explorer-paste",Icon::Paste,"Paste",can_paste).on_click(cx.listener({let path=path.clone();move|this,_,w,cx|if can_paste{this.explorer_menu=None;this.paste_entry(path.clone(),w,cx);cx.notify();}})))
-            .child(icon_label("explorer-show-in-folder",Icon::FolderOpen,if cfg!(target_os="macos"){"在 Finder 中显示"}else{"在资源管理器中显示"},false,true).w_full().h(px(32.)).justify_start().bg(rgb(POPOVER))
+            .child(action("explorer-rename-action",Icon::Replace,crate::i18n::text("Rename"),operations).on_click(cx.listener({let (root,path)=(root.clone(),path.clone());move|this,_,w,cx|if operations{this.begin_rename(root.clone(),path.clone(),w,cx);}})))
+            .child(action("explorer-delete",Icon::Close,crate::i18n::text("Delete"),operations).on_click(cx.listener({let (root,path)=(root.clone(),path.clone());move|this,_,w,cx|if operations{this.explorer_menu=None;this.delete_entry(root.clone(),path.clone(),w,cx);cx.notify();}})))
+            .child(action("explorer-copy",Icon::Copy,crate::i18n::text("Copy"),operations).on_click(cx.listener({let path=path.clone();move|this,_,_,cx|if operations{this.explorer_menu=None;this.copy_entry(path.clone(),cx);}})))
+            .child(action("explorer-paste",Icon::Paste,crate::i18n::text("Paste"),can_paste).on_click(cx.listener({let path=path.clone();move|this,_,w,cx|if can_paste{this.explorer_menu=None;this.paste_entry(path.clone(),w,cx);cx.notify();}})))
+            .child(icon_label("explorer-show-in-folder",Icon::FolderOpen,if cfg!(target_os="macos"){crate::i18n::text("在 Finder 中显示")}else{crate::i18n::text("在资源管理器中显示")},false,true).w_full().h(px(32.)).justify_start().bg(rgb(POPOVER))
                 .on_click(cx.listener(move|this,_,w,cx|{
                     this.close_explorer_menu(w,cx);
                     if this.graph.as_ref().map(|g|g.root.as_str())!=Some(root.as_str()){return;}
@@ -112,12 +112,12 @@ impl Studio {
     pub(super) fn sidebar(&self,cx:&mut Context<Self>)->Div{
         let name=self.graph.as_ref().and_then(|g|std::path::Path::new(&g.root).file_name()).map(|s|s.to_string_lossy().into_owned()).unwrap_or_else(||"Local workspace".into());
         let header=div().px(px(14.)).pt(px(12.)).pb(px(10.)).flex().flex_col().gap(px(10.))
-            .child(div().h(px(24.)).flex().items_center().justify_between().child(caption("EXPLORER")))
+            .child(div().h(px(24.)).flex().items_center().justify_between().child(caption(crate::i18n::text("EXPLORER"))))
             .child(div().flex().items_center().gap(px(8.)).child(icon(Icon::FolderOpen).size(px(15.)).text_color(rgb(ACCENT)))
                 .child(div().flex_1().min_w(px(0.)).truncate().font_weight(FontWeight::SEMIBOLD).text_size(px(13.)).child(name)))
             .child(input("file-search",&self.search));
         let actions=div().h(px(32.)).px(px(12.)).flex_none().flex().items_center().gap(px(4.))
-            .child(caption("FILES"))
+            .child(caption(crate::i18n::text("FILES")))
             .child(div().flex_1().text_size(px(10.)).text_color(rgb(DIM)).child(format!("{}",self.explorer.matched_files)))
             .child(icon_button("explorer-refresh",Icon::Refresh,if self.refreshing{"正在刷新文件树和 Graph…"}else{"刷新文件树和 Graph（保留编辑器内容）"},self.refreshing,self.graph.is_some()&&!self.refreshing&&!self.saving).w(px(23.)).h(px(23.))
                 .on_click(cx.listener(|this,_,w,cx|{if this.graph.is_some()&&!this.refreshing&&!this.saving{this.status="Refreshing files and graph…".into();this.refresh(w,cx);cx.notify();}})))
@@ -139,7 +139,7 @@ impl Studio {
                 .on_action(cx.listener(|this,_:&RenameEntry,w,cx|{if !this.saving&&let Some(root)=this.graph.as_ref().map(|g|g.root.clone())&&let Some(path)=this.explorer_selection.clone().filter(|path|!path.is_empty()){this.begin_rename(root,path,w,cx);}cx.stop_propagation();}))
                 .on_action(cx.listener(|this,_:&CopyEntry,_,cx|{if let Some(path)=this.explorer_selection.clone().filter(|s|!s.is_empty()){this.copy_entry(path,cx);}cx.stop_propagation();}))
                 .on_action(cx.listener(|this,_:&PasteEntry,w,cx|{this.paste_entry(this.explorer_selection.clone().unwrap_or_default(),w,cx);cx.stop_propagation();}))
-                .child(div().id("explorer-root-drop").px(px(13.)).h(px(23.)).flex().items_center().text_size(px(10.)).text_color(rgb(DIM)).child("WORKSPACE ROOT")
+                .child(div().id("explorer-root-drop").px(px(13.)).h(px(23.)).flex().items_center().text_size(px(10.)).text_color(rgb(DIM)).child(crate::i18n::text("WORKSPACE ROOT"))
                     .on_click(cx.listener(|this,_,w,cx|{this.explorer_selection=Some(String::new());this.explorer_focus.focus(w,cx);cx.notify();}))
                     .on_drop(cx.listener(|this,drag:&EntryDrag,w,cx|{if this.graph.as_ref().is_some_and(|g|g.root==drag.root){this.file_operation(drag.path.clone(),Op::Move(String::new()),w,cx);}cx.stop_propagation();})));
         }
@@ -198,10 +198,10 @@ impl Studio {
             }
             list=list.child(row);
         }
-        if self.explorer.rows.is_empty(){list=list.child(div().p(px(18.)).text_size(px(12.)).text_color(rgb(DIM)).child(if self.graph.is_some(){"No matching files"}else{"Open a folder to explore its files and Skills."}));}
+        if self.explorer.rows.is_empty(){list=list.child(div().p(px(18.)).text_size(px(12.)).text_color(rgb(DIM)).child(if self.graph.is_some(){crate::i18n::text("No matching files")}else{crate::i18n::text("Open a folder to explore its files and Skills.")}));}
         div().size_full().min_w(px(0.)).overflow_hidden().bg(rgb(PANEL)).flex().flex_col().child(header).child(actions).child(list)
             .child(div().h(px(38.)).px(px(12.)).border_t_1().border_color(rgb(BORDER)).flex().items_center().justify_between()
-                .child(div().text_size(px(10.)).text_color(rgb(DIM)).child(if self.workspace_file.is_some(){"SINGLE-FILE SCOPE"}else{"LOCAL WORKSPACE"}))
+                .child(div().text_size(px(10.)).text_color(rgb(DIM)).child(if self.workspace_file.is_some(){crate::i18n::text("SINGLE-FILE SCOPE")}else{crate::i18n::text("LOCAL WORKSPACE")}))
                 .child(icon_button("new-skill",Icon::Plus,"New Skill",false,self.graph.is_some()).w(px(24.)).h(px(24.)).on_click(cx.listener(|this,_,w,cx|this.command(crate::commands::Command::Create,w,cx)))))
     }
 }

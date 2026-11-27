@@ -132,8 +132,9 @@ impl Render for FlowCanvas{
   }else{0.};
   let runtime_color=|state:crate::ui::pi_trace::State|if state==running{0x4e80dd+(((pulse*71.)as u32)<<8)+(pulse*34.)as u32}else{state.color()};
   let segments:Vec<_>=self.diagram.edges.iter().map(|edge|{let a=&self.diagram.cards[edge.from];let b=&self.diagram.cards[edge.to];(a.x,a.y,a.h,b.x,b.y,b.h,edge.side,(if edge.side {self.trace_state(b)}else{None}).map(|state|visual::EdgeStyle{color:runtime_color(state),width:if state==running{2.5+pulse*2.}else{3.},alpha:1.,related:true}).unwrap_or_else(||visual::edge_style(self.selected.as_deref(),&a.id,&b.id)))}).collect();
+  let has_graph=!self.diagram.cards.is_empty();
   let mut content=div().absolute().inset_0().overflow_hidden().child(canvas(move|bounds,_,app|{let old=bounds_cell.replace(bounds);if old.size!=bounds.size{app.notify(entity_id);}},move|bounds,_,window,_|{
-   let grid=24.;for x in 0..((f32::from(bounds.size.width)/grid).ceil()as usize+1){for y in 0..((f32::from(bounds.size.height)/grid).ceil()as usize+1){let at=bounds.origin+point(px(f32::from(camera.x).rem_euclid(grid)+x as f32*grid),px(f32::from(camera.y).rem_euclid(grid)+y as f32*grid));window.paint_quad(fill(Bounds::new(at,size(px(1.),px(1.))),rgb(0x2b2e35)));}}
+   if has_graph {visual::graph_background(window,bounds,camera,z);}
    for(ax,ay,ah,bx,by,bh,side,style)in segments{
     let (from,to)=if side{if bx<ax{((ax,ay+ah*0.5),(bx+CARD_W,by+bh*0.5))}else{((ax+CARD_W,ay+ah*0.5),(bx,by+bh*0.5))}}else{((ax+CARD_W*0.5,ay+ah),(bx+CARD_W*0.5,by))};
     let start=bounds.origin+camera+point(px(from.0*z),px(from.1*z));let end=bounds.origin+camera+point(px(to.0*z),px(to.1*z));
@@ -163,14 +164,14 @@ impl Render for FlowCanvas{
     background.b+=(tint.b-background.b)*strength;
    }
    let mut card_view=div().id(SharedString::from(format!("flow-card:{}",card.id))).absolute().left(camera.x+px(card.x*z)).top(camera.y+px(card.y*z))
-    .w(px(CARD_W*z)).h(px(card.h*z)).bg(background).rounded(px(9.)).border_color(rgb(border)).overflow_hidden().flex().flex_col().cursor_pointer().shadow_md();
+    .w(px(CARD_W*z)).h(px(card.h*z)).bg(background).rounded(px(9.)).border_color(rgb(border)).overflow_hidden().flex().flex_col().cursor(CursorStyle::Arrow).shadow_md();
    card_view=if selected||runtime.is_some(){card_view.border_2()}else{card_view.border_1()};
    card_view=card_view
     .child(div().absolute().left(px(0.)).top(px(10.*z)).bottom(px(10.*z)).w(px((3.*z).max(2.)+if runtime==Some(running){pulse*4.}else{0.})).rounded(px(2.)).bg(rgb(runtime.map(runtime_color).unwrap_or(color))))
     .child(div().flex_1().min_h(px(0.)).px(px(15.*z)).py(px(11.*z)).flex().flex_col().gap(px(5.*z))
      .child(div().h(px(18.*z)).flex_none().flex().items_center().justify_between().line_height(px((13.*z).max(10.)))
       .child(div().flex().items_center().gap(px(5.*z)).text_color(rgb(color)).text_size(px((10.*z).max(8.))).font_weight(FontWeight::SEMIBOLD)
-       .child(icon(glyph).size(px((13.*z).max(9.))).text_color(rgb(color))).child(if runtime==Some(crate::ui::pi_trace::State::Running){"● RUNNING"}else if runtime==Some(State::Skipped){"SKIPPED"}else{label}))
+       .child(icon(glyph).size(px((13.*z).max(9.))).text_color(rgb(color))).child(if runtime==Some(crate::ui::pi_trace::State::Running){crate::i18n::text("● RUNNING")}else if runtime==Some(State::Skipped){crate::i18n::text("SKIPPED")}else{label}))
       .child(div().text_size(px((10.*z).max(8.))).text_color(rgb(if selected{visual::INCOMING}else{DIM})).child(if selected{"SELECTED".into()}else{format!("L{}",card.line)})))
      .child(div().h(px(if compact{45.*z}else{44.*z})).flex_none().overflow_hidden().text_size(px((16.*z).max(8.))).line_height(px((21.*z).max(10.))).font_weight(FontWeight::SEMIBOLD).text_color(rgb(TEXT)).child(card.title.clone()))
      .children((!compact).then(||{
@@ -239,7 +240,7 @@ impl Render for FlowCanvas{
     }
    }
   }
-  if self.diagram.cards.is_empty(){content=content.child(div().size_full().flex().items_center().justify_center().text_color(rgb(MUTED)).child("No SKILL.md entry found. Switch to References or open a Skill workspace."));}
+  if self.diagram.cards.is_empty(){content=content.child(div().size_full().flex().items_center().justify_center().text_color(rgb(MUTED)).child(crate::i18n::text("No SKILL.md entry found. Switch to References or open a Skill workspace.")));}
   let mut choices=div().flex().items_center().gap(px(5.)).overflow_hidden();
   if let Some(graph)=&self.graph{for(i,root)in graph.flows.iter().filter(|f|f.entry).enumerate(){let id=root.source.clone();choices=choices.child(button(("flow-root",i),root.title.clone(),Some(&id)==self.root.as_ref(),true).max_w(px(240.)).on_click(cx.listener(move|this,_,_,cx|{this.root=Some(id.clone());this.selected=None;this.history.clear();this.center_pending=true;this.rebuild();cx.notify();})));}}
   let mut trail=div().id("flow-breadcrumbs").flex().items_center().gap(px(4.)).overflow_x_scroll().h(px(30.));
@@ -265,7 +266,7 @@ impl Render for FlowCanvas{
     .child(caption(format!("{:.0}%",z*100.))));
   div().size_full().flex().flex_col().bg(rgb(CANVAS))
    .child(div().flex_none().px(px(10.)).py(px(7.)).flex().flex_col().gap(px(4.)).border_b_1().border_color(rgb(BORDER))
-    .child(choices).child(trail).child(div().text_size(px(10.)).text_color(rgb(WARNING)).child("候选流程：按文档阶段顺序排列；调用边来自引用，不代表已确认的执行、条件或返回关系。")))
+    .child(choices).child(trail).child(div().text_size(px(10.)).text_color(rgb(WARNING)).child(crate::i18n::text("候选流程：按文档阶段顺序排列；调用边来自引用，不代表已确认的执行、条件或返回关系。"))))
    .child(view)
  }
 }

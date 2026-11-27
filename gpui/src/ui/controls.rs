@@ -6,11 +6,11 @@ use gpui_base::{Input, InputBase};
 use gpui_base::input::InputState;
 
 pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, active: bool, enabled: bool) -> Stateful<Div> {
-    let label=label.into();
+    let label:SharedString=label.into();let label:SharedString=crate::i18n::text(label.as_ref()).to_owned().into();
     let bg = if active { SELECTED } else { PANEL };
     div().id(id).h(px(28.)).flex_none().px(px(10.)).flex().items_center().justify_center().gap(px(6.)).rounded(px(5.))
         .text_size(px(UI_SIZE)).line_height(px(20.)).bg(rgb(bg)).text_color(rgb(if !enabled { 0x545963 } else if active { TEXT } else { MUTED }))
-        .cursor(if enabled { CursorStyle::PointingHand } else { CursorStyle::Arrow })
+        .cursor(CursorStyle::Arrow)
         .hover(move |style| style.bg(rgb(if enabled { HOVER } else { bg })))
         .children((!label.is_empty()).then_some(label))
 }
@@ -34,7 +34,7 @@ pub fn swatch(id:impl Into<ElementId>,color:u32,hint:&'static str,selected:bool)
         .tooltip(move|_,cx|cx.new(|_|Hint(hint.into())).into())
 }
 pub fn icon_label(id:impl Into<ElementId>,glyph:Icon,label:impl Into<SharedString>,active:bool,enabled:bool)->Stateful<Div> {
-    button(id,"",active,enabled).child(icon(glyph).size(px(14.)).text_color(rgb(if !enabled{DIM}else if active{TEXT}else{MUTED}))).child(label.into())
+    button(id,"",active,enabled).child(icon(glyph).size(px(14.)).text_color(rgb(if !enabled{DIM}else if active{TEXT}else{MUTED}))).child(crate::i18n::text(label.into().as_ref()).to_owned())
 }
 pub fn primary_icon(id:impl Into<ElementId>,glyph:Icon,hint:impl Into<SharedString>)->Stateful<Div>{
     let hint=hint.into();
@@ -48,6 +48,6 @@ pub fn input(id: &'static str, state: &Entity<InputState>) -> InputBase {
         .on_mouse_down(MouseButton::Left,move |_,window,cx|focus.update(cx,|state,cx|state.focus(window,cx)))
         .child(div().size_full().flex().items_center().gap(px(7.)).child(icon(if id=="new-skill-name"{Icon::Skill}else{Icon::Search}).size(px(14.)).text_color(rgb(MUTED))).child(div().flex_1().min_w(px(0.)).child(Input::new(state))))
 }
-pub fn caption(label: impl Into<SharedString>) -> Div { div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).child(label.into()) }
+pub fn caption(label: impl Into<SharedString>) -> Div { div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).child(crate::i18n::text(label.into().as_ref()).to_owned()) }
 pub fn separator() -> Div { div().w(px(1.)).h(px(16.)).flex_none().bg(rgb(BORDER)).mx(px(3.)) }
 pub fn bar() -> Div { div().h(px(42.)).flex_none().px(px(12.)).flex().items_center().gap(px(6.)).border_b_1().border_color(rgb(BORDER)) }

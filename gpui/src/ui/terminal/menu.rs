@@ -10,7 +10,7 @@ impl TerminalView{
             .child(icon_label("terminal-live",Icon::Focus,"回到实时输出",false,true).w_full().justify_start().bg(rgb(POPOVER)).on_click(cx.listener(|this,_,w,cx|this.return_live(w,cx))))
             .child(icon_label("terminal-app-scroll",Icon::Mouse,"应用滚动 · ConPTY 兼容",app_scroll,true).w_full().justify_start().bg(rgb(if app_scroll{SELECTED}else{POPOVER})).on_click(cx.listener(|this,_,w,cx|{this.menu=false;let mut g=this.grid.borrow_mut();g.force_app_scroll=!g.force_app_scroll;g.wheel.reset();drop(g);this.focus.focus(w,cx);cx.notify();})))
             .child(div().h(px(1.)).my(px(4.)).bg(rgb(BORDER)))
-            .child(div().h(px(30.)).px(px(8.)).flex().items_center().gap(px(5.)).child(div().flex_1().text_size(px(12.)).child("终端字号"))
+            .child(div().h(px(30.)).px(px(8.)).flex().items_center().gap(px(5.)).child(div().flex_1().text_size(px(12.)).child(crate::i18n::text("终端字号")))
                 .child(icon_button("terminal-font-smaller",Icon::Minus,"减小终端字号（不影响文档）",false,fs>10).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|this.zoom(-1,cx))))
                 .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(format!("{fs}")))
                 .child(icon_button("terminal-font-larger",Icon::Plus,"增大终端字号（不影响文档）",false,fs<26).w(px(22.)).h(px(22.)).on_click(cx.listener(|this,_,_,cx|this.zoom(1,cx))))
